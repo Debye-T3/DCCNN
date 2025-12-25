@@ -1,0 +1,26 @@
+model:
+  kernel_size: 3
+  num_layers: 7  # 回退 v1，稳定
+
+training:
+  batch_size: 6
+  learning_rate: 1e-04  # v1 好
+  epochs: 50  # v1 + 少增
+  alpha: 0.1  # v1，平衡 MSE/SSIM
+  early_stopping_patience: 12
+  val_split: 0.10
+  split_seed: 123
+  use_gpu: true
+
+paths:
+  h5_glob: "./data/converted_h5/MS30013.h5"
+  output_dir: "./results_v3"  # 新
+  csv_subdir: "csv"
+
+data:
+  samples_per_file: 512  # 保持 v2 增变异
+  crop_size: [256, 256]
+  input_channel: 0
+  input_key: "raw_channels"
+  target_key: "spectrum"
+  normalize: true  # 新: 强制 MinMax [0,1]

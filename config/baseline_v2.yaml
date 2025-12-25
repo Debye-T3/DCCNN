@@ -1,0 +1,26 @@
+model:
+  kernel_size: 3
+  num_layers: 8  # 稍深，捕更多细节 (从7→8)
+
+training:
+  batch_size: 6  # 保持
+  learning_rate: 5e-05  # 降半，稳定收敛
+  epochs: 70  # 增，给 cosine 空间
+  alpha: 0.05  # 进一步降，减模糊
+  early_stopping_patience: 15  # 更多容忍
+  val_split: 0.15  # 稍多 val (0.10→0.15)，更好泛化
+  split_seed: 123
+  use_gpu: true
+
+paths:
+  h5_glob: "./data/converted_h5/MS30013.h5"  # 保持
+  output_dir: "./results_v2"  # 新文件夹，避免混
+  csv_subdir: "csv"
+
+data:
+  samples_per_file: 512  # 增 (384→512)，更多 patches 变异
+  crop_size: [256, 256]
+  input_channel: 0
+  input_key: "raw_channels"
+  target_key: "spectrum"
+  augment_prob: 0.3  # 新: 增强概率 (随机翻转/旋转)

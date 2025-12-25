@@ -1,0 +1,2 @@
+file,model_tag,dataset,mae,mse,preview
+data\converted_h5\MS30013.h5,20251216_190449_layers8_batch6_kernel3_alpha0.05,denoised_20251216_190449_layers8_batch6_kernel3_alpha0.05,7539.6162109375,57339176.0,D:\ZhouHY\dccnn\dccnn-arpes-main\results_v2\inference\previews\MS30013_20251216_190449_layers8_batch6_kernel3_alpha0.05_comparison.png
