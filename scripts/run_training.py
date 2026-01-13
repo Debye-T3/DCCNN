@@ -20,7 +20,7 @@ def load_config(path):
 
 def run_all_configs(config_dir):
     #configs = sorted(glob.glob(f"{config_dir}/*.yaml")) # searching for all .yaml files and gives back a list with all of them
-    configs = sorted(glob.glob(f"{config_dir}/baseline_v3.yaml"))  # 只跑 v2
+    configs = sorted(glob.glob(f"{config_dir}/baseline_v3.yaml"))  # 只跑 v2!!!
     
 
     for cfg_path in configs: # for every .yaml file
