@@ -14,10 +14,13 @@ except ModuleNotFoundError:
 
 def loss_function(output, target, alpha):
     mae = nn.L1Loss()(output, target)
-    msssim = sum(
-        1 - MS_SSIM(data_range=1.0, channel=1)(output[i:i+1], target[i:i+1])
-        for i in range(output.shape[0])
-    ) / output.shape[0]
+
+    msssim_values = []
+    for i in range(output.shape[0]):
+        t = target[i : i + 1]
+        data_range = (t.max() - t.min()).clamp(min=1e-6).item()
+        msssim_values.append(1 - MS_SSIM(data_range=data_range, channel=1)(output[i : i + 1], t))
+    msssim = sum(msssim_values) / output.shape[0]
 
     total_loss = (1 - alpha) * mae + alpha * msssim
 

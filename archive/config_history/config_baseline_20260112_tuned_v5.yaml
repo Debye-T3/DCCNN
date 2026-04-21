@@ -1,0 +1,29 @@
+model:
+  kernel_size: 3
+  num_layers: 7
+
+training:
+  batch_size: 6
+  learning_rate: 5e-05
+  epochs: 100
+  alpha: 0.08
+  early_stopping_patience: 12
+  val_split: 0.10
+  split_seed: 123
+  use_gpu: true
+
+paths:
+  h5_glob: "./data/converted_h5/MS*_txt.h5"
+  # Use only MS *_txt.h5 files for training.
+  output_dir: "./results_ms_txt_v5"
+  csv_subdir: "csv"
+
+data:
+  samples_per_file: 256
+  crop_size: [192, 192]
+  input_channel: 0
+  input_key: "raw_channels"
+  target_key: "spectrum"
+  normalize: true
+  add_noise: true
+  noise_std: 0.035

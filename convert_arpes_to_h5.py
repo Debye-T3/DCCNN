@@ -180,13 +180,22 @@ def load_pxt(
     payload = np.frombuffer(raw, dtype="<i2", count=width * height * channel_count, offset=header_bytes)
     payload = payload.reshape(height, width, channel_count)
 
-    if not 0 <= channel < channel_count:
-        raise ValueError(f"{path}: channel index {channel} out of range for {channel_count} available channels.")
+    # Optional auto-channel selection: pick channel with highest positive mean
+    chosen_channel = channel
+    if channel < 0:
+        pos_means = []
+        for ch in range(channel_count):
+            ch_data = payload[..., ch].astype(np.float32)
+            pos_means.append(np.mean(np.clip(ch_data, a_min=0.0, a_max=None)))
+        chosen_channel = int(np.argmax(pos_means))
 
-    signal = payload[..., channel].astype(np.float32)
+    if not 0 <= chosen_channel < channel_count:
+        raise ValueError(f"{path}: channel index {chosen_channel} out of range for {channel_count} available channels.")
+
+    signal = payload[..., chosen_channel].astype(np.float32)
     subtracted_from: Optional[int] = None
     if subtract_dark and channel_count > 1:
-        dark_idx = 1 if channel == 0 else (channel - 1 if channel > 0 else None)
+        dark_idx = 1 if chosen_channel == 0 else (chosen_channel - 1 if chosen_channel > 0 else None)
         if dark_idx is not None and 0 <= dark_idx < channel_count:
             signal = signal - payload[..., dark_idx].astype(np.float32)
             subtracted_from = dark_idx
@@ -206,7 +215,7 @@ def load_pxt(
     attrs: Dict[str, Any] = {
         "frame_type": frame_type,
         "channels_total": int(channel_count),
-        "channel_used": int(channel),
+        "channel_used": int(chosen_channel),
         "raw_energy_offset": float(energy_offset_raw),
         "raw_energy_step": float(energy_step_raw),
         "raw_angle_offset": float(angle_offset_raw),
@@ -269,12 +278,37 @@ def write_h5(
             handle.attrs[key] = value
 
 
+def compute_contrast(data: np.ndarray, pmin: float, pmax: float) -> Dict[str, float]:
+    """Percentile-based contrast limits with safety clamps."""
+    if data.size == 0:
+        return {"vmin": 1e-6, "vmax": 1.0}
+    positive = data[data > 0]
+    if positive.size == 0:
+        positive = np.abs(data.ravel())
+    vmin = np.percentile(positive, pmin) if positive.size else 0.0
+    vmax = np.percentile(positive, pmax) if positive.size else 1.0
+    if vmax <= vmin:
+        vmax = positive.max() if positive.size else 1.0
+        vmin = max(vmax * 1e-3, 1e-6)
+    return {"vmin": float(vmin), "vmax": float(vmax)}
+
+
 def save_preview(
     spectrum: np.ndarray,
     axes: Dict[str, np.ndarray],
     destination: Path,
     slice_index: int,
     thetax_column: int,
+    cmap: str,
+    pmin: float,
+    pmax: float,
+    use_log: bool,
+    energy_index: int,
+    angle_index: int,
+    energy_min: Optional[float],
+    energy_max: Optional[float],
+    angle_min: Optional[float],
+    angle_max: Optional[float],
 ) -> None:
     ensure_directory(destination.parent)
 
@@ -284,22 +318,16 @@ def save_preview(
         column_idx = int(np.clip(thetax_column, 0, height - 1))
 
         spectrum_slice = np.clip(spectrum[:, :, slice_idx], a_min=0.0, a_max=None)
-        positive = spectrum_slice[spectrum_slice > 0]
-        if positive.size:
-            vmin = max(np.percentile(positive, 5), 1e-6)
-            vmax = np.percentile(positive, 99)
-            if vmax <= vmin:
-                vmax = positive.max()
-                vmin = max(vmax * 1e-3, 1e-6)
-            norm = LogNorm(vmin=vmin, vmax=vmax)
-        else:
-            norm = None
+        norm = None
+        if use_log:
+            stats = compute_contrast(spectrum_slice, pmin, pmax)
+            norm = LogNorm(vmin=stats["vmin"], vmax=stats["vmax"])
 
         fig, (ax_slice, ax_energy) = plt.subplots(1, 2, figsize=(12, 5))
         heatmap_kwargs = {
             "origin": "lower",
             "aspect": "auto",
-            "cmap": "inferno",
+            "cmap": cmap,
         }
         if norm is not None:
             heatmap_kwargs["norm"] = norm
@@ -329,11 +357,32 @@ def save_preview(
         ax_energy.set_ylabel("Intensity")
         ax_energy.grid(True, alpha=0.3)
     elif spectrum.ndim == 2:
+        # Simple heatmap preview (no EDC/MDC subplots) with optional log contrast and axis cropping
         data = np.clip(spectrum, a_min=0.0, a_max=None)
         energy_axis = axes.get("energy")
         angle_axis = axes.get("thetax")
         if angle_axis is None:
             angle_axis = axes.get("angle")
+
+        # Optional physical-range cropping
+        if energy_axis is not None and energy_axis.size == data.shape[0]:
+            mask_energy = np.ones_like(energy_axis, dtype=bool)
+            if energy_min is not None:
+                mask_energy &= energy_axis >= energy_min
+            if energy_max is not None:
+                mask_energy &= energy_axis <= energy_max
+            if mask_energy.any():
+                data = data[mask_energy, :]
+                energy_axis = energy_axis[mask_energy]
+        if angle_axis is not None and angle_axis.size == data.shape[1]:
+            mask_angle = np.ones_like(angle_axis, dtype=bool)
+            if angle_min is not None:
+                mask_angle &= angle_axis >= angle_min
+            if angle_max is not None:
+                mask_angle &= angle_axis <= angle_max
+            if mask_angle.any():
+                data = data[:, mask_angle]
+                angle_axis = angle_axis[mask_angle]
 
         extent = None
         if (
@@ -349,22 +398,14 @@ def save_preview(
                 float(energy_axis[-1]),
             ]
 
-        positive = data[data > 0]
-        if positive.size:
-            vmin = max(np.percentile(positive, 5), 1e-6)
-            vmax = np.percentile(positive, 99)
-            if vmax <= vmin:
-                vmax = positive.max()
-                vmin = max(vmax * 1e-3, 1e-6)
-            norm = LogNorm(vmin=vmin, vmax=vmax)
-        else:
-            norm = None
+        stats = compute_contrast(data, pmin, pmax)
+        norm = LogNorm(vmin=stats["vmin"], vmax=stats["vmax"]) if use_log else None
 
         fig, ax = plt.subplots(figsize=(7, 5))
         heatmap_kwargs = {
             "origin": "lower",
             "aspect": "auto",
-            "cmap": "inferno",
+            "cmap": cmap,
         }
         if extent is not None:
             heatmap_kwargs["extent"] = extent
@@ -372,7 +413,7 @@ def save_preview(
             heatmap_kwargs["norm"] = norm
         heatmap = ax.imshow(data, **heatmap_kwargs)
         fig.colorbar(heatmap, ax=ax)
-        ax.set_title("Cut (log scale)" if norm is not None else "Cut")
+        ax.set_title("Spectrum (log scale)" if norm is not None else "Spectrum")
         ax.set_xlabel("Angle [deg]" if angle_axis is not None else "Angle index")
         ax.set_ylabel("Energy [eV]" if energy_axis is not None else "Energy index")
     else:
@@ -457,8 +498,25 @@ def convert_file(
 
         write_h5(spectrum, axes, output_path, attrs, overwrite=args.force, extra_datasets=extras)
         print(f"[OK] {path} -> {output_path}")
+
         if preview_path:
-            save_preview(spectrum, axes, preview_path, args.slice_index, args.thetax_column)
+            save_preview(
+                spectrum,
+                axes,
+                preview_path,
+                args.slice_index,
+                args.thetax_column,
+                cmap=args.preview_cmap,
+                pmin=args.preview_pmin,
+                pmax=args.preview_pmax,
+                use_log=args.preview_log,
+                energy_index=args.preview_energy_index,
+                angle_index=args.preview_angle_index,
+                energy_min=args.preview_energy_min,
+                energy_max=args.preview_energy_max,
+                angle_min=args.preview_angle_min,
+                angle_max=args.preview_angle_max,
+            )
             print(f"     Preview -> {preview_path}")
         stats.converted += 1
     except Exception as exc:  # pylint: disable=broad-except
@@ -522,6 +580,65 @@ def build_parser() -> argparse.ArgumentParser:
         help="Column index used for the representative energy spectrum.",
     )
     parser.add_argument(
+        "--preview-cmap",
+        type=str,
+        default="inferno",
+        help="Matplotlib colormap for previews.",
+    )
+    parser.add_argument(
+        "--preview-pmin",
+        type=float,
+        default=1.0,
+        help="Lower percentile for contrast stretching (e.g., 1).",
+    )
+    parser.add_argument(
+        "--preview-pmax",
+        type=float,
+        default=99.8,
+        help="Upper percentile for contrast stretching (e.g., 99.8).",
+    )
+    parser.add_argument(
+        "--preview-log",
+        action="store_true",
+        help="Use logarithmic color scaling (LogNorm) with the given percentiles.",
+    )
+    parser.add_argument(
+        "--preview-energy-index",
+        type=int,
+        default=-1,
+        help="Energy index for EDC (row) in preview; -1 uses center.",
+    )
+    parser.add_argument(
+        "--preview-angle-index",
+        type=int,
+        default=-1,
+        help="Angle index for MDC (column) in preview; -1 uses center.",
+    )
+    parser.add_argument(
+        "--preview-energy-min",
+        type=float,
+        default=None,
+        help="Optional energy lower bound for preview cropping (eV).",
+    )
+    parser.add_argument(
+        "--preview-energy-max",
+        type=float,
+        default=None,
+        help="Optional energy upper bound for preview cropping (eV).",
+    )
+    parser.add_argument(
+        "--preview-angle-min",
+        type=float,
+        default=None,
+        help="Optional angle lower bound for preview cropping (deg).",
+    )
+    parser.add_argument(
+        "--preview-angle-max",
+        type=float,
+        default=None,
+        help="Optional angle upper bound for preview cropping (deg).",
+    )
+    parser.add_argument(
         "--bin-shape",
         type=parse_shape,
         default=(365, 571, 51),
@@ -562,7 +679,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--pxt-channel",
         type=int,
         default=0,
-        help="Channel index to export from multi-channel PXT files (0-based).",
+        help="Channel index to export from multi-channel PXT files (0-based). Use -1 for auto-pick (max positive mean).",
     )
     parser.add_argument(
         "--pxt-subtract-dark",

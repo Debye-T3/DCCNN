@@ -1,0 +1,2 @@
+file,model_tag,dataset,mae,mse,psnr,ssim,preview
+data\converted_h5\nbvt0005_txt.h5,20260113_162502_layers7_batch6_kernel3_alpha0.08,denoised_20260113_162502_layers7_batch6_kernel3_alpha0.08,3.138678789138794,26.74290657043457,17.493551117171634,0.3413538280676585,D:\ZhouHY\dccnn\dccnn-arpes-main\results_nbvt_test\previews\20260113_162502_layers7_batch6_kernel3_alpha0.08\nbvt0005_txt_20260113_162502_layers7_batch6_kernel3_alpha0.08_comparison.png

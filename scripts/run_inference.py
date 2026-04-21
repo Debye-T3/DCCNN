@@ -2,7 +2,7 @@ import argparse
 import glob
 import os
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import h5py
 import matplotlib.pyplot as plt
@@ -50,11 +50,11 @@ def log_scale(data: np.ndarray) -> Dict[str, float]:
     return {"vmin": vmin, "vmax": vmax}
 
 
-def save_preview(noisy: np.ndarray, denoised: np.ndarray, clean: np.ndarray, extent, output_path: Path) -> None:
+def save_preview(noisy: np.ndarray, denoised: np.ndarray, extent, output_path: Path) -> None:
     ensure_dir(output_path.parent)
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-    titles = ["Noisy input", "Denoised", "Reference spectrum"]
-    datasets = [noisy, denoised, clean]
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    titles = ["Noisy input", "Denoised"]
+    datasets = [noisy, denoised]
 
     for ax, title, data in zip(axes, titles, datasets):
         stats = log_scale(data)
@@ -72,47 +72,156 @@ def save_preview(noisy: np.ndarray, denoised: np.ndarray, clean: np.ndarray, ext
     plt.close(fig)
 
 
+def compute_energy_mask_info(
+    spectrum: np.ndarray,
+    energy: np.ndarray,
+    threshold_ratio: float,
+    min_run: int,
+    method: str,
+    percentile: float,
+    smooth_window: int,
+) -> Tuple[np.ndarray, Optional[int], Optional[float], int]:
+    if energy.ndim != 1 or energy.size == 0:
+        return np.ones_like(spectrum, dtype=np.float32), None, None, 0
+
+    axis = 0
+    if energy.size == spectrum.shape[1]:
+        axis = 1
+
+    profile = spectrum.mean(axis=1 - axis)
+    if smooth_window and smooth_window > 1:
+        win = max(3, int(smooth_window))
+        if win % 2 == 0:
+            win += 1
+        kernel = np.ones(win, dtype=np.float32) / float(win)
+        profile = np.convolve(profile, kernel, mode="same")
+    max_val = float(profile.max())
+    if max_val <= 0.0:
+        return np.ones_like(spectrum, dtype=np.float32), None, None, axis
+
+    if method == "percentile":
+        threshold = float(np.percentile(profile, percentile))
+    else:
+        threshold = max_val * threshold_ratio
+    below = profile < threshold
+    run_len = max(1, int(min_run))
+
+    high_at_start = energy[0] > energy[-1]
+    mask_1d = np.ones_like(profile, dtype=np.float32)
+    run = 0
+    cutoff = None
+    if high_at_start:
+        for idx in range(profile.size):
+            if below[idx]:
+                run += 1
+                if run >= run_len:
+                    cutoff = idx
+                    break
+            else:
+                run = 0
+        if cutoff is not None:
+            mask_1d[: cutoff + 1] = 0.0
+    else:
+        for idx in range(profile.size - 1, -1, -1):
+            if below[idx]:
+                run += 1
+                if run >= run_len:
+                    cutoff = idx
+                    break
+            else:
+                run = 0
+        if cutoff is not None:
+            mask_1d[cutoff:] = 0.0
+
+    cutoff_energy = None
+    if cutoff is not None and energy.size == profile.size:
+        cutoff_energy = float(energy[cutoff])
+
+    if axis == 0:
+        mask = np.repeat(mask_1d[:, None], spectrum.shape[1], axis=1).astype(np.float32)
+    else:
+        mask = np.repeat(mask_1d[None, :], spectrum.shape[0], axis=0).astype(np.float32)
+    return mask, cutoff, cutoff_energy, axis
+
+
+def apply_preview_noise(noisy: np.ndarray, noise_std: float, mask: Optional[np.ndarray]) -> np.ndarray:
+    if noise_std <= 0.0:
+        return noisy
+    sigma = float(noisy.std() + 1e-6) * noise_std
+    if sigma <= 0.0:
+        return noisy
+    rng = np.random.default_rng(seed=0)
+    noise = rng.normal(0.0, sigma, size=noisy.shape).astype(np.float32)
+    if mask is not None:
+        noise = noise * mask
+    return noisy + noise
+
+
+def save_mask(mask: np.ndarray, extent, output_path: Path) -> None:
+    ensure_dir(output_path.parent)
+    fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+    kwargs = {"origin": "lower", "aspect": "auto", "cmap": "gray", "vmin": 0.0, "vmax": 1.0}
+    if extent is not None:
+        kwargs["extent"] = extent
+    im = ax.imshow(mask, **kwargs)
+    ax.set_title("Noise mask")
+    ax.set_xlabel("Angle [deg]" if extent else "Angle index")
+    ax.set_ylabel("Energy [eV]" if extent else "Energy index")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(output_path)
+    plt.close(fig)
+
+
 def run_inference(
     config_path: Path,
     model_path: Path,
     input_glob: str,
     output_dir: Path,
     target_key_override: str = "",
+    input_files: Optional[List[str]] = None,
+    preview_noise: bool = False,
 ) -> None:
     cfg = load_config(config_path)
     model_cfg = cfg["model"]
     data_cfg = cfg.get("data", {})
     path_cfg = cfg["paths"]
 
-    if not input_glob:
-        input_glob = path_cfg.get("h5_glob", "")
-    if not input_glob:
-        raise ValueError("No input glob specified. Provide --input-glob or set paths.h5_glob in config.")
-
-    files = sorted(glob.glob(input_glob))
+    files: List[str] = []
+    if input_files:
+        files = [str(p) for p in input_files]
+    else:
+        if not input_glob:
+            input_glob = path_cfg.get("h5_glob", "")
+        if not input_glob:
+            raise ValueError("No input glob specified. Provide --input-glob or set paths.h5_glob in config.")
+        files = sorted(glob.glob(input_glob))
     if not files:
         raise FileNotFoundError(f"No HDF5 files matched pattern '{input_glob}'.")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    #model = CCNN(model_cfg["kernel_size"], model_cfg["num_layers"])
-    # 匹配 v2 .pt 实际层数 (从 debug max=13 +1=14)
-    num_layers = 14
-    model = CCNN(model_cfg["kernel_size"], num_layers)
+    model = CCNN(model_cfg["kernel_size"], model_cfg["num_layers"])  # 与训练配置对齐
     state = torch.load(model_path, map_location=device)
-    #model.load_state_dict(state)
-    model.load_state_dict(state, strict=False)  # 忽略 missing/unexpected 键
-    print("Loaded with strict=False; mismatched keys ignored.")
+    model.load_state_dict(state)  # strict=True 默认，避免权重错配被忽略
     model.to(device)
     model.eval()
     model_tag = model_path.stem
 
     summaries = []
-    preview_dir = output_dir / "previews"
+    preview_dir = output_dir / "previews" / model_tag
     ensure_dir(preview_dir)
 
     input_key = data_cfg.get("input_key", "raw_channels")
     target_key = target_key_override or data_cfg.get("target_key", "spectrum")
     input_channel = data_cfg.get("input_channel", 0)
+
+    normalize = bool(data_cfg.get("normalize", False))
+    noise_std = float(data_cfg.get("noise_std", 0.0))
+    noise_energy_threshold = float(data_cfg.get("noise_energy_threshold", 0.0))
+    noise_min_run = int(data_cfg.get("noise_min_run", 0))
+    noise_energy_method = str(data_cfg.get("noise_energy_method", "max_ratio"))
+    noise_energy_percentile = float(data_cfg.get("noise_energy_percentile", 5.0))
+    noise_energy_smooth = int(data_cfg.get("noise_energy_smooth", 0))
 
     for file_path in files:
         path = Path(file_path)
@@ -142,19 +251,24 @@ def run_inference(
             else:
                 raise ValueError(f"{path}: shape mismatch between input {noisy.shape} and target {clean.shape}")
 
-                       # Norm 用 noisy 范围 (训时 noisy/target 同 norm)
-        noisy_norm, noisy_mean, noisy_std = ArpesH5Dataset._normalize(noisy, return_stats=True)
+        if normalize:
+            # Norm 用 noisy 范围 (训时 noisy/target 同 norm)
+            noisy_norm, noisy_mean, noisy_std = ArpesH5Dataset._normalize(noisy, return_stats=True)
+        else:
+            noisy_norm = noisy.astype(np.float32)
+            noisy_mean, noisy_std = 0.0, 1.0
 
         tensor_in = torch.from_numpy(noisy_norm).unsqueeze(0).unsqueeze(0).to(device).float()  # 确保 float
         with torch.no_grad():
-            noise_pred = model(tensor_in)  # 预测噪声，shape: [1, 1, H, W]
+            clean_pred = model(tensor_in)  # 直接预测干净谱图，shape: [1, 1, H, W]
 
-        # === 修复开始：将 noise_pred 转为 numpy 并 squeeze ===
-        noise_pred_np = noise_pred.squeeze(0).squeeze(0).cpu().numpy()  # 从 [1,1,H,W] -> [H,W]
-        # === 修复结束 ===
+        clean_pred_np = clean_pred.squeeze(0).squeeze(0).cpu().numpy()  # 从 [1,1,H,W] -> [H,W]
 
-        denoised_norm = noisy_norm - noise_pred_np  # 现在都是 numpy.ndarray，可以相减
-        denoised = ArpesH5Dataset._denormalize(denoised_norm, noisy_mean, noisy_std)  # 用 noisy std 反转
+        denoised_norm = clean_pred_np  # 模型输出即干净谱图的标准化结果
+        if normalize:
+            denoised = ArpesH5Dataset._denormalize(denoised_norm, noisy_mean, noisy_std)  # 用 noisy std 反转
+        else:
+            denoised = denoised_norm
         
         mae = float(np.mean(np.abs(denoised - clean)))
         mse = float(np.mean((denoised - clean) ** 2))
@@ -174,7 +288,27 @@ def run_inference(
 
         extent = prepare_extent(energy, angle)
         preview_path = preview_dir / f"{path.stem}_{model_tag}_comparison.png"
-        save_preview(noisy, denoised, clean, extent, preview_path)
+        preview_mask = None
+        cutoff_idx = None
+        cutoff_energy = None
+        cutoff_axis = None
+        if preview_noise and energy.size and (
+            noise_energy_method == "percentile" or noise_energy_threshold > 0.0
+        ):
+            preview_mask, cutoff_idx, cutoff_energy, cutoff_axis = compute_energy_mask_info(
+                clean,
+                energy,
+                noise_energy_threshold,
+                noise_min_run,
+                noise_energy_method,
+                noise_energy_percentile,
+                noise_energy_smooth,
+            )
+        preview_noisy = apply_preview_noise(noisy, noise_std, preview_mask) if preview_noise else noisy
+        save_preview(preview_noisy, denoised, extent, preview_path)
+        if preview_mask is not None:
+            mask_path = preview_dir / f"{path.stem}_{model_tag}_mask.png"
+            save_mask(preview_mask, extent, mask_path)
 
         summaries.append(
             {
@@ -186,18 +320,37 @@ def run_inference(
                 "psnr": psnr_val,  # 新增
                 "ssim": ssim_val,  # 新增
                 "preview": str(preview_path),
+                "cutoff_idx": cutoff_idx if cutoff_idx is not None else "",
+                "cutoff_energy": cutoff_energy if cutoff_energy is not None else "",
+                "cutoff_axis": cutoff_axis if cutoff_axis is not None else "",
             }
         )
+        if cutoff_idx is not None:
+            print(f"[MASK] {path.name}: cutoff_idx={cutoff_idx}, cutoff_energy={cutoff_energy}, axis={cutoff_axis}")
         print(f"[OK] {path.name}: MAE={mae:.4f}, MSE={mse:.4f}, PSNR={psnr_val:.2f}, SSIM={ssim_val:.4f}")
 
     if summaries:
         import csv
 
-        csv_path = output_dir / "inference_metrics.csv"
-        ensure_dir(output_dir)
+        metrics_dir = output_dir / "metrics" / model_tag
+        ensure_dir(metrics_dir)
+        csv_path = metrics_dir / "inference_metrics.csv"
         with open(csv_path, "w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(
-                handle, fieldnames=["file", "model_tag", "dataset", "mae", "mse", "psnr", "ssim", "preview"]  # 新增 psnr/ssim
+                handle,
+                fieldnames=[
+                    "file",
+                    "model_tag",
+                    "dataset",
+                    "mae",
+                    "mse",
+                    "psnr",
+                    "ssim",
+                    "preview",
+                    "cutoff_idx",
+                    "cutoff_energy",
+                    "cutoff_axis",
+                ],
             )
             writer.writeheader()
             writer.writerows(summaries)
@@ -216,6 +369,11 @@ def main():
         help="Override target dataset name (default uses config; falls back to 'spectrum' if missing).",
     )
     parser.add_argument("--output-dir", type=Path, default=Path("results/inference"), help="Directory for previews/metrics.")
+    parser.add_argument(
+        "--preview-noise",
+        action="store_true",
+        help="Apply synthetic noise to preview-only noisy input (uses data.noise_std).",
+    )
     args = parser.parse_args()
 
     config_path = args.config.resolve()
@@ -229,7 +387,14 @@ def main():
     output_dir = args.output_dir.resolve()
     ensure_dir(output_dir)
 
-    run_inference(config_path, model_path, args.input_glob, output_dir, target_key_override=args.target_key)
+    run_inference(
+        config_path,
+        model_path,
+        args.input_glob,
+        output_dir,
+        target_key_override=args.target_key,
+        preview_noise=args.preview_noise,
+    )
 
 
 if __name__ == "__main__":
