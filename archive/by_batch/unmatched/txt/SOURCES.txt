@@ -1,0 +1,16 @@
+LICENSE
+README.md
+setup.py
+dccnn_project.egg-info/PKG-INFO
+dccnn_project.egg-info/SOURCES.txt
+dccnn_project.egg-info/dependency_links.txt
+dccnn_project.egg-info/top_level.txt
+modules/__init__.py
+modules/datasets/__init__.py
+modules/datasets/dataset.py
+modules/loss_functions/__init__.py
+modules/loss_functions/loss_function.py
+modules/models/__init__.py
+modules/models/ccnn.py
+train/__init__.py
+train/trainer.py

@@ -1,0 +1,18 @@
+Batch: 20260114_164841_layers7_batch6_kernel3_alpha0.08
+Total files: 10
+Type counts:
+- csv: 1
+- png: 8
+- pt: 1
+
+Files:
+csv/20260114_164841_layers7_batch6_kernel3_alpha0.08.csv
+png/MS30013_txt_20260114_164841_layers7_batch6_kernel3_alpha0.08_comparison.png
+png/MS30013_txt_20260114_164841_layers7_batch6_kernel3_alpha0.08_mask.png
+png/MS30015_txt_20260114_164841_layers7_batch6_kernel3_alpha0.08_comparison.png
+png/MS30015_txt_20260114_164841_layers7_batch6_kernel3_alpha0.08_mask.png
+png/MS30017_txt_20260114_164841_layers7_batch6_kernel3_alpha0.08_comparison.png
+png/MS30017_txt_20260114_164841_layers7_batch6_kernel3_alpha0.08_mask.png
+png/MS30019_txt_20260114_164841_layers7_batch6_kernel3_alpha0.08_comparison.png
+png/MS30019_txt_20260114_164841_layers7_batch6_kernel3_alpha0.08_mask.png
+pt/20260114_164841_layers7_batch6_kernel3_alpha0.08.pt

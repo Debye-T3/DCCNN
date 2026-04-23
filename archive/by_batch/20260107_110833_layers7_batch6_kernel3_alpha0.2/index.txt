@@ -1,0 +1,15 @@
+Batch: 20260107_110833_layers7_batch6_kernel3_alpha0.2
+Total files: 7
+Type counts:
+- csv: 1
+- png: 5
+- pt: 1
+
+Files:
+csv/20260107_110833_layers7_batch6_kernel3_alpha0.2.csv
+png/MS30013_txt_20260107_110833_layers7_batch6_kernel3_alpha0.2_comparison.png
+png/MS30015_txt_20260107_110833_layers7_batch6_kernel3_alpha0.2_comparison.png
+png/MS30017_txt_20260107_110833_layers7_batch6_kernel3_alpha0.2_comparison.png
+png/MS30019_txt_20260107_110833_layers7_batch6_kernel3_alpha0.2_comparison.png
+png/nbvt0005_txt_20260107_110833_layers7_batch6_kernel3_alpha0.2_comparison.png
+pt/20260107_110833_layers7_batch6_kernel3_alpha0.2.pt

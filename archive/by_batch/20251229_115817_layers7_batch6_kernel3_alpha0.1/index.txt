@@ -1,0 +1,7 @@
+Batch: 20251229_115817_layers7_batch6_kernel3_alpha0.1
+Total files: 1
+Type counts:
+- png: 1
+
+Files:
+png/MS30013_20251229_115817_layers7_batch6_kernel3_alpha0.1_comparison.png

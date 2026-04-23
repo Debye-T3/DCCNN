@@ -1,0 +1,91 @@
+Batch: unmatched
+Total files: 79
+Type counts:
+- csv: 27
+- h5: 1
+- no_ext: 1
+- other: 2
+- png: 35
+- txt: 5
+- yaml: 8
+
+Files:
+csv/inference_metrics.csv
+csv/inference_metrics_dup1.csv
+csv/inference_metrics_dup10.csv
+csv/inference_metrics_dup11.csv
+csv/inference_metrics_dup12.csv
+csv/inference_metrics_dup13.csv
+csv/inference_metrics_dup14.csv
+csv/inference_metrics_dup15.csv
+csv/inference_metrics_dup16.csv
+csv/inference_metrics_dup17.csv
+csv/inference_metrics_dup18.csv
+csv/inference_metrics_dup19.csv
+csv/inference_metrics_dup2.csv
+csv/inference_metrics_dup20.csv
+csv/inference_metrics_dup21.csv
+csv/inference_metrics_dup22.csv
+csv/inference_metrics_dup23.csv
+csv/inference_metrics_dup24.csv
+csv/inference_metrics_dup25.csv
+csv/inference_metrics_dup26.csv
+csv/inference_metrics_dup3.csv
+csv/inference_metrics_dup4.csv
+csv/inference_metrics_dup5.csv
+csv/inference_metrics_dup6.csv
+csv/inference_metrics_dup7.csv
+csv/inference_metrics_dup8.csv
+csv/inference_metrics_dup9.csv
+h5/MS30013.h5
+no_ext/PKG-INFO
+other/convert_arpes_to_h5.cpython-313.pyc
+other/convert_txt_to_h5.cpython-313.pyc
+png/loss_analysis.png
+png/lr_plot_20251110_194210.png
+png/lr_plot_20251110_194257.png
+png/lr_plot_20251110_195302.png
+png/lr_plot_20251113_155255.png
+png/lr_plot_20251113_180241.png
+png/lr_plot_20251114_173436.png
+png/lr_plot_20251118_185223.png
+png/lr_plot_20251118_195826.png
+png/lr_plot_20251118_205954.png
+png/lr_plot_20251125_174717.png
+png/lr_plot_20251216_174302.png
+png/lr_plot_20251216_214433.png
+png/lr_plot_20251217_120946.png
+png/lr_plot_20251229_130103.png
+png/lr_plot_20251229_183802.png
+png/lr_plot_20251230_134855.png
+png/lr_plot_20251230_170103.png
+png/lr_plot_20251230_184540.png
+png/lr_plot_20251230_211342.png
+png/lr_plot_20251230_231432.png
+png/lr_plot_20260106_003536.png
+png/lr_plot_20260107_115007.png
+png/lr_plot_20260108_032651.png
+png/lr_plot_20260109_023633.png
+png/lr_plot_20260109_162603.png
+png/lr_plot_20260112_220346.png
+png/lr_plot_20260113_142847.png
+png/lr_plot_20260113_215451.png
+png/lr_plot_20260114_182301.png
+png/lr_plot_20260114_220017.png
+png/lr_plot_20260420_120138.png
+png/lr_plot_20260421_142404.png
+png/lr_plot_20260422_044740.png
+png/MS30013.png
+txt/dependency_links.txt
+txt/README.txt
+txt/README_dup1.txt
+txt/SOURCES.txt
+txt/top_level.txt
+yaml/config_baseline_20260107_194409_backup.yaml
+yaml/config_baseline_20260108_tuned.yaml
+yaml/config_baseline_20260108_tuned_v2.yaml
+yaml/config_baseline_20260109_tuned_v4.yaml
+yaml/config_baseline_20260112_tuned_v5.yaml
+yaml/config_baseline_20260113_quick4.yaml
+yaml/config_baseline_20260113_tuned_v6.yaml
+yaml/config_baseline_20260113_tuned_v7.yaml

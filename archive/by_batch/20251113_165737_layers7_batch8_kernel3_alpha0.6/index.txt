@@ -1,0 +1,9 @@
+Batch: 20251113_165737_layers7_batch8_kernel3_alpha0.6
+Total files: 2
+Type counts:
+- csv: 1
+- pt: 1
+
+Files:
+csv/20251113_165737_layers7_batch8_kernel3_alpha0.6.csv
+pt/20251113_165737_layers7_batch8_kernel3_alpha0.6.pt

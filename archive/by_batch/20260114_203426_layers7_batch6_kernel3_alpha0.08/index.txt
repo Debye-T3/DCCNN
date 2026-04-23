@@ -1,0 +1,9 @@
+Batch: 20260114_203426_layers7_batch6_kernel3_alpha0.08
+Total files: 2
+Type counts:
+- csv: 1
+- pt: 1
+
+Files:
+csv/20260114_203426_layers7_batch6_kernel3_alpha0.08.csv
+pt/20260114_203426_layers7_batch6_kernel3_alpha0.08.pt

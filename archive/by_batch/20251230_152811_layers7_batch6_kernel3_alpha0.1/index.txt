@@ -1,0 +1,15 @@
+Batch: 20251230_152811_layers7_batch6_kernel3_alpha0.1
+Total files: 7
+Type counts:
+- csv: 1
+- png: 4
+- pt: 2
+
+Files:
+csv/20251230_152811_layers7_batch6_kernel3_alpha0.1.csv
+png/MS30013_20251230_152811_layers7_batch6_kernel3_alpha0.1_comparison.png
+png/MS30013_20251230_152811_layers7_batch6_kernel3_alpha0.1_comparison_dup1.png
+png/MS30013_20251230_152811_layers7_batch6_kernel3_alpha0.1_comparison_dup2.png
+png/MS30013_20251230_152811_layers7_batch6_kernel3_alpha0.1_comparison_dup3.png
+pt/20251230_152811_layers7_batch6_kernel3_alpha0.1.pt
+pt/20251230_152811_layers7_batch6_kernel3_alpha0.1_dup1.pt

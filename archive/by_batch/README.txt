@@ -1,0 +1,11 @@
+Archive by batch
+???????
+
+Structure:
+- archive/by_batch/<batch>/<type>/...
+- archive/by_batch/<batch>/index.txt
+- archive/by_batch/_batch_summary.csv
+
+Notes:
+- "unmatched" contains files without recognized model-tag in filename.
+- "unmatched" ??????????????????????

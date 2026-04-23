@@ -3,6 +3,7 @@ import glob
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import zlib
 
 import h5py
 import matplotlib.pyplot as plt
@@ -50,11 +51,23 @@ def log_scale(data: np.ndarray) -> Dict[str, float]:
     return {"vmin": vmin, "vmax": vmax}
 
 
-def save_preview(noisy: np.ndarray, denoised: np.ndarray, extent, output_path: Path) -> None:
+def save_preview(
+    clean: np.ndarray,
+    noisy: np.ndarray,
+    denoised: np.ndarray,
+    extent,
+    output_path: Path,
+    include_reference: bool = False,
+) -> None:
     ensure_dir(output_path.parent)
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-    titles = ["Noisy input", "Denoised"]
-    datasets = [noisy, denoised]
+    if include_reference:
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+        titles = ["Reference spectrum", "Noisy input", "Denoised"]
+        datasets = [clean, noisy, denoised]
+    else:
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+        titles = ["Input spectrum", "Denoised"]
+        datasets = [noisy, denoised]
 
     for ax, title, data in zip(axes, titles, datasets):
         stats = log_scale(data)
@@ -157,6 +170,65 @@ def apply_preview_noise(noisy: np.ndarray, noise_std: float, mask: Optional[np.n
     return noisy + noise
 
 
+def apply_stripe_noise(
+    array: np.ndarray,
+    rng: np.random.Generator,
+    strength: float,
+    mask: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    patch = np.array(array, dtype=np.float32, copy=True)
+    sigma = float(patch.std() + 1e-6) * strength
+    if sigma <= 0.0:
+        return patch
+    height, width = patch.shape
+    if float(rng.random()) < 0.5:
+        stripe = rng.normal(0.0, sigma, size=(height, 1)).astype(np.float32)
+    else:
+        stripe = rng.normal(0.0, sigma, size=(1, width)).astype(np.float32)
+    if mask is not None:
+        stripe = stripe * mask
+    return patch + stripe
+
+
+def apply_blur(array: np.ndarray, sigma: float, mask: Optional[np.ndarray] = None) -> np.ndarray:
+    patch = np.array(array, dtype=np.float32, copy=True)
+    if sigma <= 0.0:
+        return patch
+    radius = max(1, int(round(sigma * 2)))
+    size = radius * 2 + 1
+    x = np.arange(-radius, radius + 1, dtype=np.float32)
+    kernel_1d = np.exp(-(x ** 2) / (2 * sigma ** 2))
+    kernel_1d /= float(kernel_1d.sum())
+    kernel = np.outer(kernel_1d, kernel_1d).astype(np.float32)
+    padded = np.pad(patch, radius, mode="edge")
+    out = np.zeros_like(patch)
+    for i in range(size):
+        for j in range(size):
+            out += kernel[i, j] * padded[i : i + patch.shape[0], j : j + patch.shape[1]]
+    if mask is not None:
+        out = patch * (1.0 - mask) + out * mask
+    return out
+
+
+def build_synthetic_noisy(
+    clean: np.ndarray,
+    noise_std: float,
+    stripe_noise_prob: float,
+    stripe_strength: float,
+    blur_prob: float,
+    blur_sigma: float,
+    mask: Optional[np.ndarray],
+    seed: int,
+) -> np.ndarray:
+    rng = np.random.default_rng(seed=seed)
+    noisy = apply_preview_noise(clean, noise_std, mask)
+    if stripe_noise_prob > 0.0 and stripe_strength > 0.0 and float(rng.random()) < stripe_noise_prob:
+        noisy = apply_stripe_noise(noisy, rng, stripe_strength, mask=mask)
+    if blur_prob > 0.0 and blur_sigma > 0.0 and float(rng.random()) < blur_prob:
+        noisy = apply_blur(noisy, blur_sigma, mask=mask)
+    return noisy
+
+
 def save_mask(mask: np.ndarray, extent, output_path: Path) -> None:
     ensure_dir(output_path.parent)
     fig, ax = plt.subplots(1, 1, figsize=(4, 4))
@@ -181,6 +253,8 @@ def run_inference(
     target_key_override: str = "",
     input_files: Optional[List[str]] = None,
     preview_noise: bool = False,
+    inference_noise: bool = False,
+    inference_noise_std: Optional[float] = None,
 ) -> None:
     cfg = load_config(config_path)
     model_cfg = cfg["model"]
@@ -222,6 +296,10 @@ def run_inference(
     noise_energy_method = str(data_cfg.get("noise_energy_method", "max_ratio"))
     noise_energy_percentile = float(data_cfg.get("noise_energy_percentile", 5.0))
     noise_energy_smooth = int(data_cfg.get("noise_energy_smooth", 0))
+    stripe_noise_prob = float(data_cfg.get("stripe_noise_prob", 0.0))
+    stripe_strength = float(data_cfg.get("stripe_strength", 0.0))
+    blur_prob = float(data_cfg.get("blur_prob", 0.0))
+    blur_sigma = float(data_cfg.get("blur_sigma", 0.0))
 
     for file_path in files:
         path = Path(file_path)
@@ -251,11 +329,42 @@ def run_inference(
             else:
                 raise ValueError(f"{path}: shape mismatch between input {noisy.shape} and target {clean.shape}")
 
+        preview_mask = None
+        cutoff_idx = None
+        cutoff_energy = None
+        cutoff_axis = None
+        if energy.size and (noise_energy_method == "percentile" or noise_energy_threshold > 0.0):
+            preview_mask, cutoff_idx, cutoff_energy, cutoff_axis = compute_energy_mask_info(
+                clean,
+                energy,
+                noise_energy_threshold,
+                noise_min_run,
+                noise_energy_method,
+                noise_energy_percentile,
+                noise_energy_smooth,
+            )
+
+        # Decide model input: original input or synthetic-noisy input.
+        noisy_input_for_model = noisy
+        if inference_noise:
+            std_to_use = noise_std if inference_noise_std is None else float(inference_noise_std)
+            seed = zlib.crc32(path.name.encode("utf-8")) & 0xFFFFFFFF
+            noisy_input_for_model = build_synthetic_noisy(
+                clean=clean.astype(np.float32),
+                noise_std=std_to_use,
+                stripe_noise_prob=stripe_noise_prob,
+                stripe_strength=stripe_strength,
+                blur_prob=blur_prob,
+                blur_sigma=blur_sigma,
+                mask=preview_mask,
+                seed=seed,
+            )
+
         if normalize:
             # Norm 用 noisy 范围 (训时 noisy/target 同 norm)
-            noisy_norm, noisy_mean, noisy_std = ArpesH5Dataset._normalize(noisy, return_stats=True)
+            noisy_norm, noisy_mean, noisy_std = ArpesH5Dataset._normalize(noisy_input_for_model, return_stats=True)
         else:
-            noisy_norm = noisy.astype(np.float32)
+            noisy_norm = noisy_input_for_model.astype(np.float32)
             noisy_mean, noisy_std = 0.0, 1.0
 
         tensor_in = torch.from_numpy(noisy_norm).unsqueeze(0).unsqueeze(0).to(device).float()  # 确保 float
@@ -288,24 +397,20 @@ def run_inference(
 
         extent = prepare_extent(energy, angle)
         preview_path = preview_dir / f"{path.stem}_{model_tag}_comparison.png"
-        preview_mask = None
-        cutoff_idx = None
-        cutoff_energy = None
-        cutoff_axis = None
-        if preview_noise and energy.size and (
-            noise_energy_method == "percentile" or noise_energy_threshold > 0.0
-        ):
-            preview_mask, cutoff_idx, cutoff_energy, cutoff_axis = compute_energy_mask_info(
-                clean,
-                energy,
-                noise_energy_threshold,
-                noise_min_run,
-                noise_energy_method,
-                noise_energy_percentile,
-                noise_energy_smooth,
-            )
-        preview_noisy = apply_preview_noise(noisy, noise_std, preview_mask) if preview_noise else noisy
-        save_preview(preview_noisy, denoised, extent, preview_path)
+        if inference_noise:
+            preview_noisy = noisy_input_for_model
+        elif preview_noise:
+            preview_noisy = apply_preview_noise(noisy, noise_std, preview_mask)
+        else:
+            preview_noisy = noisy
+        save_preview(
+            clean,
+            preview_noisy,
+            denoised,
+            extent,
+            preview_path,
+            include_reference=bool(inference_noise),
+        )
         if preview_mask is not None:
             mask_path = preview_dir / f"{path.stem}_{model_tag}_mask.png"
             save_mask(preview_mask, extent, mask_path)
@@ -320,6 +425,7 @@ def run_inference(
                 "psnr": psnr_val,  # 新增
                 "ssim": ssim_val,  # 新增
                 "preview": str(preview_path),
+                "inference_noise": int(bool(inference_noise)),
                 "cutoff_idx": cutoff_idx if cutoff_idx is not None else "",
                 "cutoff_energy": cutoff_energy if cutoff_energy is not None else "",
                 "cutoff_axis": cutoff_axis if cutoff_axis is not None else "",
@@ -347,6 +453,7 @@ def run_inference(
                     "psnr",
                     "ssim",
                     "preview",
+                    "inference_noise",
                     "cutoff_idx",
                     "cutoff_energy",
                     "cutoff_axis",
@@ -374,6 +481,17 @@ def main():
         action="store_true",
         help="Apply synthetic noise to preview-only noisy input (uses data.noise_std).",
     )
+    parser.add_argument(
+        "--inference-noise",
+        action="store_true",
+        help="Apply synthetic noise to model input during inference (for denoising demonstration).",
+    )
+    parser.add_argument(
+        "--inference-noise-std",
+        type=float,
+        default=None,
+        help="Override synthetic Gaussian noise std factor for --inference-noise.",
+    )
     args = parser.parse_args()
 
     config_path = args.config.resolve()
@@ -394,6 +512,8 @@ def main():
         output_dir,
         target_key_override=args.target_key,
         preview_noise=args.preview_noise,
+        inference_noise=args.inference_noise,
+        inference_noise_std=args.inference_noise_std,
     )
 
 

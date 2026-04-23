@@ -1,0 +1,9 @@
+Batch: 20251110_195252_layers5_batch4_kernel3_alpha0.7
+Total files: 2
+Type counts:
+- csv: 1
+- pt: 1
+
+Files:
+csv/20251110_195252_layers5_batch4_kernel3_alpha0.7.csv
+pt/20251110_195252_layers5_batch4_kernel3_alpha0.7.pt
