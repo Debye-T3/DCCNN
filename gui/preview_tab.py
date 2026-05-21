@@ -4,10 +4,11 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("QtAgg")
+
+import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.colors import LogNorm
-import numpy as np
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -80,7 +81,6 @@ class PreviewTab(QWidget):
 
         self.canvas = FigureCanvas(Figure(figsize=(7, 5)))
         self.ax = self.canvas.figure.add_subplot(111)
-        self.canvas.figure.tight_layout()
         main_row.addWidget(self.canvas, 1)
 
         contrast_group = QGroupBox("Contrast")
@@ -157,7 +157,10 @@ class PreviewTab(QWidget):
     def _refresh_preview(self):
         if self._current_data is None:
             return
-        self.ax.clear()
+        # Clear entire figure to prevent colorbar accumulation
+        self.canvas.figure.clear()
+        self.ax = self.canvas.figure.add_subplot(111)
+
         data = np.clip(self._current_data, a_min=0.0, a_max=None)
         use_kspace = self.kspace_cb.isChecked()
         use_log = self.log_cb.isChecked()
