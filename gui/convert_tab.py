@@ -55,7 +55,7 @@ class ConvertTab(QWidget):
         self.log_view.setStyleSheet(
             "background-color: #1a1a2e; color: #a0ffa0; font-family: Consolas, monospace; font-size: 10pt;"
         )
-        self.log_view.setMaximumBlockCount(500)
+        self.log_view.document().setMaximumBlockCount(500)
         layout.addWidget(self.log_view, 1)
 
         nav = QHBoxLayout()
