@@ -1,6 +1,7 @@
 """Canonical xarray/HDF5 boundary for ARPES two-dimensional cuts."""
 
 import os
+import warnings
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -8,6 +9,10 @@ import numpy as np
 import xarray as xr
 
 _CUT_DIMS = ("eV", "alpha")
+
+# Prefer the bundled pure-HDF5 backend for xarray's unqualified loading path.
+# netCDF4 remains installed as a fallback for formats h5netcdf cannot open.
+xr.set_options(netcdf_engine_order=("h5netcdf", "netcdf4", "scipy"))
 
 
 def _is_real_numeric(dtype: np.dtype) -> bool:
@@ -30,7 +35,7 @@ def _validate_axis(data: xr.DataArray, dimension: str) -> None:
     values = np.asarray(coordinate.values)
     if not np.isfinite(values).all():
         raise ValueError(f"dimension coordinate {dimension} must contain only finite values")
-    differences = np.diff(values)
+    differences = np.diff(values.astype(np.float64))
     if not (np.all(differences > 0) or np.all(differences < 0)):
         raise ValueError(f"dimension coordinate {dimension} must be strictly monotonic")
 
@@ -65,7 +70,13 @@ def load_cut(path: Path, *, allow_legacy: bool = False) -> xr.DataArray:
     """Load a canonical cut, explicitly opting into legacy adaptation when needed."""
     path = Path(path)
     try:
-        loaded = xr.load_dataarray(path)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="The 'phony_dims' kwarg now defaults to 'access'.*",
+                category=UserWarning,
+            )
+            loaded = xr.load_dataarray(path)
     except Exception as canonical_error:
         if allow_legacy:
             from .legacy_h5 import load_legacy_cut

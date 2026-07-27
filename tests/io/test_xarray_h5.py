@@ -13,7 +13,7 @@ def test_write_cut_round_trips_canonical_data(tmp_path, canonical_cut):
 
     write_cut(canonical_cut, path)
 
-    restored = xr.load_dataarray(path, engine="h5netcdf")
+    restored = xr.load_dataarray(path)
     np.testing.assert_array_equal(restored.values, canonical_cut.values)
     np.testing.assert_array_equal(restored.coords["eV"].values, canonical_cut.coords["eV"].values)
     np.testing.assert_array_equal(
@@ -33,6 +33,14 @@ def test_validate_cut_requires_strictly_monotonic_coordinates(canonical_cut):
     """Rejects repeated energy positions that break a physical axis."""
     with pytest.raises(ValueError, match="strictly monotonic"):
         validate_cut(canonical_cut.assign_coords(eV=[0.0, 0.0, 0.1, 0.2]))
+
+
+def test_validate_cut_rejects_descending_unsigned_coordinate_step(canonical_cut):
+    """Rejects unsigned coordinates whose decreasing step would otherwise wrap."""
+    invalid = canonical_cut.assign_coords(eV=np.array([1, 0, 2, 3], dtype=np.uint16))
+
+    with pytest.raises(ValueError, match="strictly monotonic"):
+        validate_cut(invalid)
 
 
 def test_validate_cut_normalizes_dimension_order_and_data_dtype(canonical_cut):

@@ -35,6 +35,9 @@ build-backend = "hatchling.build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.uv]
+constraint-dependencies = ["numpy<2.4"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
