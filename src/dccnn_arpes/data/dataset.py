@@ -42,9 +42,13 @@ def _shared_exposures(
     left: ManifestRecord, right: ManifestRecord
 ) -> tuple[float, float] | None:
     if left.acquisition_time_s is not None and right.acquisition_time_s is not None:
-        return float(left.acquisition_time_s), float(right.acquisition_time_s)
+        times = float(left.acquisition_time_s), float(right.acquisition_time_s)
+        if times[0] != times[1]:
+            return times
     if left.sweep_count is not None and right.sweep_count is not None:
-        return float(left.sweep_count), float(right.sweep_count)
+        sweeps = float(left.sweep_count), float(right.sweep_count)
+        if sweeps[0] != sweeps[1]:
+            return sweeps
     return None
 
 
@@ -258,7 +262,7 @@ class ArpesCutDataset(Dataset):
             "crop_eV": origin[0],
             "crop_alpha": origin[1],
             "crop_origin": origin,
-            "transform_stats": stats,
+            "transform_stats": {"lower": stats.lower, "scale": stats.scale},
             "identity_constraint": identity,
         }
         return input_tensor, target_tensor, metadata

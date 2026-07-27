@@ -7,12 +7,13 @@ import numpy as np
 import pytest
 import torch
 import xarray as xr
+from torch.utils.data import DataLoader
 
 from dccnn_arpes.data.dataset import ArpesCutDataset
 from dccnn_arpes.data.noise import NoiseParameters
 from dccnn_arpes.data.pairing import PairRecord
 from dccnn_arpes.data.schema import ManifestRecord
-from dccnn_arpes.data.transforms import IntensityTransform
+from dccnn_arpes.data.transforms import IntensityTransform, TransformStats
 from dccnn_arpes.io.xarray_h5 import write_cut
 
 
@@ -97,7 +98,7 @@ def test_a_pair_uses_count_rates_shared_stats_and_identical_crop_origin(mixed_re
     )
 
     input_tensor, target_tensor, metadata = dataset[0]
-    stats = metadata["transform_stats"]
+    stats = TransformStats(**metadata["transform_stats"])
     transform = IntensityTransform()
     input_rate = transform.inverse(input_tensor.squeeze(0).numpy(), stats)
     target_rate = transform.inverse(target_tensor.squeeze(0).numpy(), stats)
@@ -195,3 +196,45 @@ def test_a_pair_orientation_compares_a_shared_acquisition_field(tmp_path):
     )
 
     assert dataset[0][2]["record_id"] == "short"
+
+
+def test_a_pair_orientation_uses_different_sweeps_when_times_are_tied(tmp_path):
+    """Treating equal acquisition times as ordered must keep the long record as input."""
+    base = np.arange(1, 13 * 15 + 1, dtype=np.float32).reshape(13, 15)
+    long = _write_record(
+        tmp_path,
+        "long",
+        base * 5.0,
+        acquisition_time_s=5.0,
+        sweep_count=8,
+    )
+    short = _write_record(
+        tmp_path,
+        "short",
+        base * 5.0,
+        acquisition_time_s=5.0,
+        sweep_count=2,
+    )
+    pair = PairRecord("pair-a", "long", "short", "A")
+    dataset = _dataset(
+        [long, short],
+        [pair],
+        sampling={"A": 1.0, "B": 0.0, "C": 0.0},
+        samples_per_epoch=1,
+    )
+
+    assert dataset[0][2]["record_id"] == "short"
+
+
+def test_default_dataloader_collates_transform_statistics(mixed_records):
+    """Returning a custom statistics object must make default collation raise."""
+    records, pairs = mixed_records
+    dataset = _dataset(records, pairs, samples_per_epoch=2)
+
+    input_batch, target_batch, metadata = next(
+        iter(DataLoader(dataset, batch_size=2, shuffle=False))
+    )
+
+    assert input_batch.shape == target_batch.shape == (2, 1, 8, 10)
+    assert metadata["transform_stats"]["lower"].shape == (2,)
+    assert metadata["transform_stats"]["scale"].shape == (2,)
