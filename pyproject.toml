@@ -1,0 +1,40 @@
+[project]
+name = "dccnn-arpes"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "h5netcdf>=1.7",
+  "h5py>=3.12",
+  "matplotlib>=3.9",
+  "netCDF4>=1.7",
+  "numpy>=2.1",
+  "openpyxl>=3.1",
+  "pandas>=2.2",
+  "pytorch-msssim>=1.0",
+  "pyyaml>=6.0",
+  "scikit-image>=0.24",
+  "scipy>=1.14",
+  "torch>=2.7",
+  "tqdm>=4.66",
+  "xarray>=2024.10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "pytest-cov>=6.0", "ruff>=0.9"]
+
+[project.scripts]
+dccnn-data = "dccnn_arpes.cli.data:main"
+dccnn-train = "dccnn_arpes.cli.train:main"
+dccnn-eval = "dccnn_arpes.cli.eval:main"
+dccnn-denoise = "dccnn_arpes.cli.denoise:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
