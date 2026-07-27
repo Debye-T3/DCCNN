@@ -105,9 +105,10 @@ def test_inventory_is_stable_groups_duplicates_and_never_mutates_sources(tmp_pat
     assert by_path["reports/metrics.csv"]["type"] == "csv"
     assert by_path["previews/cut.png"]["type"] == "png"
     assert by_path["config/train.yaml"]["type"] == "config"
-    assert by_path["weights/model.pt"]["duplicate_group"] == by_path["copies/model-copy.pth"][
-        "duplicate_group"
-    ]
+    assert (
+        by_path["weights/model.pt"]["duplicate_group"]
+        == by_path["copies/model-copy.pth"]["duplicate_group"]
+    )
     assert by_path["weights/model.pt"]["duplicate_group"]
     assert by_path["converted/cut.h5"]["duplicate_group"] == ""
     for row in rows:
@@ -215,7 +216,68 @@ def test_inventory_result_directories_are_relative_to_the_source_root(tmp_path: 
     with output.open(encoding="utf-8", newline="") as stream:
         by_path = {row["path"]: row for row in csv.DictReader(stream)}
     assert "ordinary" not in by_path
-    assert by_path["ordinary/asset.bin"]["type"] == "other"
+    assert "ordinary/asset.bin" not in by_path
+
+
+def test_default_inventory_prunes_modern_trees_and_reports_only_legacy_asset_types(
+    tmp_path: Path,
+) -> None:
+    """Default inventory must stay bounded and never archive current implementation files."""
+    repo = tmp_path / "repo"
+    archive = tmp_path / "archive"
+    output = tmp_path / "inventory.csv"
+    included = {
+        "weights/legacy.pt": b"checkpoint",
+        "converted/legacy.h5": b"h5",
+        "reports/legacy.csv": b"csv",
+        "previews/legacy.png": b"png",
+        "config/legacy.yaml": b"config",
+        "results_legacy/run-001/summary.txt": b"result",
+    }
+    excluded = {
+        ".git/objects/current.pt": b"git",
+        ".worktrees/branch/legacy.h5": b"worktree",
+        ".superpowers/sdd/review.csv": b"sdd",
+        "src/dccnn_arpes/current.h5": b"current package",
+        "tests/fixtures/current.pt": b"current tests",
+        "docs/current.yaml": b"current docs",
+        "cache/legacy.h5": b"cache",
+        "current/legacy.pt": b"current",
+        "venv/Lib/site-packages/current.h5": b"named environment",
+        "env/Scripts/current.pt": b"named environment",
+        "custom-runtime/pyvenv.cfg": b"home = C:/Python312",
+        "custom-runtime/Lib/site-packages/current.csv": b"marked environment",
+        "ordinary/unknown.bin": b"unknown",
+        "README.md": b"documentation",
+    }
+    excluded.update(
+        {
+            f".venv/Lib/site-packages/package/cache-{index:03d}.h5": b"environment"
+            for index in range(64)
+        }
+    )
+    for relative, content in {**included, **excluded}.items():
+        path = repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    _run_inventory(repo, archive, output)
+
+    with output.open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    by_path = {row["path"]: row for row in rows}
+    assert {
+        "weights/legacy.pt",
+        "converted/legacy.h5",
+        "reports/legacy.csv",
+        "previews/legacy.png",
+        "config/legacy.yaml",
+        "results_legacy",
+        "results_legacy/run-001",
+    } <= set(by_path)
+    assert set(by_path).isdisjoint(excluded)
+    assert not any(path.startswith(".venv/") for path in by_path)
+    assert "other" not in {row["type"] for row in rows}
 
 
 def test_inventory_skips_external_symlinks_without_mutating_them(tmp_path: Path) -> None:
@@ -265,7 +327,9 @@ def test_inventory_skips_external_junctions_without_mutating_them(tmp_path: Path
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
-def test_inventory_rejects_proposed_destination_that_resolves_outside_archive(tmp_path: Path) -> None:
+def test_inventory_rejects_proposed_destination_that_resolves_outside_archive(
+    tmp_path: Path,
+) -> None:
     """An archive junction must not redirect a proposed destination outside its root."""
     repo = tmp_path / "repo"
     source = repo / "redirect" / "input.h5"

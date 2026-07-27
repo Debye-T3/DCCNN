@@ -96,6 +96,24 @@ def test_smoke_overrides_are_in_memory_and_limited(tmp_path):
     assert path.read_bytes() == original
 
 
+def test_smoke_selects_its_explicit_provenance_without_changing_the_manifest(tmp_path):
+    """One manifest must support distinct controlled-smoke and reviewed-scientific authority."""
+    values = _valid_config(tmp_path)
+    scientific_provenance = tmp_path / "reviewed-scientific-provenance.json"
+    smoke_provenance = tmp_path / "controlled-smoke-provenance.json"
+    values["paths"]["provenance_path"] = str(scientific_provenance)
+    values["paths"]["smoke_provenance_path"] = str(smoke_provenance)
+
+    config = load_train_config(_write_config(tmp_path, values))
+    smoke = config.for_smoke_test(device="cpu")
+
+    assert config.paths.provenance_path == scientific_provenance
+    assert smoke.paths.provenance_path == smoke_provenance
+    assert smoke.paths.manifest == config.paths.manifest
+    assert smoke.paths.pairs == config.paths.pairs
+    assert smoke.paths.splits == config.paths.splits
+
+
 @pytest.mark.parametrize(
     ("section", "key", "value"),
     [

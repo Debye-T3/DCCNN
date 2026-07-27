@@ -38,6 +38,7 @@ def _cut(
         name="intensity",
         attrs={
             "acquisition_time_s": 2.0,
+            "denoising_checkpoint_sha256": "a" * 64,
             "scientific_use": str(scientific).lower(),
             "smoke_test": str(not scientific).lower(),
         },
@@ -92,6 +93,40 @@ def test_non_scientific_output_writes_evidence_but_never_passes_acceptance(tmp_p
     assert high_quality_evidence["peak_prominence_threshold"] == 0.05
     assert high_quality_evidence["stripe_standard_deviation_threshold"] == 5.0
     assert saved["rules"]["7_temperature_trends"]["evidence"]["jump_factor_threshold"] == 3.0
+
+
+def test_scientific_gate_rejects_mixed_residual_checkpoint_hashes(tmp_path):
+    """Pooling outputs from two model snapshots must never pass the scientific gate."""
+    first = _case("first", scientific=True)
+    second = _case("second", scientific=True)
+    second.output_da.attrs["denoising_checkpoint_sha256"] = "b" * 64
+
+    acceptance = generate_evaluation_report([first, second], tmp_path / "mixed-checkpoints")
+
+    gate = acceptance["scientific_gate"]
+    assert acceptance["status"] == "not_evaluated"
+    assert gate["pass"] is False
+    assert gate["checkpoint_sha256"] == {
+        "expected": "one non-empty SHA-256 shared by every residual output",
+        "observed": ["a" * 64, "b" * 64],
+        "missing_record_ids": [],
+    }
+    assert "multiple checkpoint" in gate["reason"]
+
+
+def test_scientific_gate_records_missing_residual_checkpoint_hashes(tmp_path):
+    """A scientific residual without checkpoint provenance must remain not evaluated."""
+    case = _case("missing-checkpoint", scientific=True)
+    del case.output_da.attrs["denoising_checkpoint_sha256"]
+
+    acceptance = generate_evaluation_report([case], tmp_path / "missing-checkpoint")
+
+    gate = acceptance["scientific_gate"]
+    assert acceptance["status"] == "not_evaluated"
+    assert gate["pass"] is False
+    assert gate["checkpoint_sha256"]["observed"] == []
+    assert gate["checkpoint_sha256"]["missing_record_ids"] == ["missing-checkpoint"]
+    assert "missing checkpoint" in gate["reason"]
 
 
 def test_report_writes_all_methods_metrics_summaries_and_fixed_scale_figures(tmp_path):
@@ -483,15 +518,11 @@ def test_cli_writes_controlled_report_under_allowed_root_as_not_evaluated(
                 "review_status": "approved",
             }
         )
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("seed: 20260727\n", encoding="utf-8")
     destination = allowed_root / "controlled-evaluation"
     monkeypatch.setattr(eval_cli, "_REPORT_ROOT", allowed_root)
 
     eval_cli.main(
         [
-            "--config",
-            str(config_path),
             "--split",
             str(split_path),
             "--output",
@@ -509,8 +540,6 @@ def test_cli_rejects_report_destinations_outside_dccnn_outputs(tmp_path, monkeyp
     """Writing a report outside the configured output root must fail before creating it."""
     allowed_root = tmp_path / "outputs"
     monkeypatch.setattr(eval_cli, "_REPORT_ROOT", allowed_root)
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("seed: 20260727\n", encoding="utf-8")
     split_path = tmp_path / "test.csv"
     split_path.write_text("record_id\none\n", encoding="utf-8")
     forbidden = tmp_path / "forbidden"
@@ -518,8 +547,6 @@ def test_cli_rejects_report_destinations_outside_dccnn_outputs(tmp_path, monkeyp
     with pytest.raises(ValueError, match="must be under"):
         eval_cli.main(
             [
-                "--config",
-                str(config_path),
                 "--split",
                 str(split_path),
                 "--output",
@@ -561,15 +588,11 @@ def test_cli_preserves_standard_split_rows_when_scientific_artifacts_do_not_exis
                 "review_status": "approved",
             }
         )
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("seed: 20260727\n", encoding="utf-8")
     destination = allowed_root / "standard-split-evaluation"
     monkeypatch.setattr(eval_cli, "_REPORT_ROOT", allowed_root)
 
     eval_cli.main(
         [
-            "--config",
-            str(config_path),
             "--split",
             str(split_path),
             "--output",
@@ -631,15 +654,11 @@ def test_cli_fallback_temperature_group_keeps_missing_temperature_standard_split
                 },
             ]
         )
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("seed: 20260727\n", encoding="utf-8")
     destination = allowed_root / "fallback-temperature-group"
     monkeypatch.setattr(eval_cli, "_REPORT_ROOT", allowed_root)
 
     eval_cli.main(
         [
-            "--config",
-            str(config_path),
             "--split",
             str(split_path),
             "--output",
@@ -656,3 +675,151 @@ def test_cli_fallback_temperature_group_keeps_missing_temperature_standard_split
     rule = acceptance["rules"]["7_temperature_trends"]
     assert rule["status"] == "not_evaluated"
     assert rule["evidence"]["missing_temperature_record_ids"] == ["missing-temperature"]
+
+
+def test_cli_joins_file_id_keyed_artifacts_to_a_standard_split_for_all_five_methods(
+    tmp_path, monkeypatch
+):
+    """A reviewed artifact table must complete the native split without embedding paths in it."""
+    allowed_root = tmp_path / "outputs"
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    cuts = {
+        "input": _cut(center_eV=0.12, scientific=True),
+        "denoised": _cut(center_eV=0.10, scientific=True),
+        "reference": _cut(center_eV=0.10, scientific=True),
+        "legacy": _cut(center_eV=0.11, scientific=True),
+    }
+    cuts["denoised"].attrs["denoising_checkpoint_sha256"] = "a" * 64
+    paths = {}
+    for name, cut in cuts.items():
+        path = artifact_dir / f"{name}.h5"
+        write_cut(cut, path)
+        paths[name] = path
+
+    split_path = tmp_path / "test.csv"
+    with split_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=(
+                "record_id",
+                "file_id",
+                "converted_path",
+                "pair_type",
+                "split",
+                "review_status",
+            ),
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "record_id": "locked-row",
+                "file_id": "file-001",
+                "converted_path": paths["input"],
+                "pair_type": "A",
+                "split": "test",
+                "review_status": "approved",
+            }
+        )
+    artifacts_path = tmp_path / "reviewed-artifacts.csv"
+    with artifacts_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=(
+                "file_id",
+                "denoised_path",
+                "reference_path",
+                "legacy_output_path",
+            ),
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "file_id": "file-001",
+                "denoised_path": paths["denoised"],
+                "reference_path": paths["reference"],
+                "legacy_output_path": paths["legacy"],
+            }
+        )
+    destination = allowed_root / "scientific-comparison"
+    monkeypatch.setattr(eval_cli, "_REPORT_ROOT", allowed_root)
+
+    eval_cli.main(
+        [
+            "--split",
+            str(split_path),
+            "--artifacts",
+            str(artifacts_path),
+            "--output",
+            str(destination),
+        ]
+    )
+
+    rows = pd.read_csv(destination / "per_file_metrics.csv")
+    assert set(rows["method"]) == {
+        "raw_input",
+        "gaussian",
+        "median",
+        "LegacyCCNN",
+        "ResidualDenoiser2D",
+    }
+    assert set(rows["evaluation_status"]) == {"evaluated"}
+    acceptance = json.loads((destination / "acceptance.json").read_text(encoding="utf-8"))
+    assert acceptance["scientific_gate"]["pass"] is True
+
+
+@pytest.mark.parametrize(
+    ("artifact_ids", "message"),
+    [
+        (["locked-row", "locked-row"], "duplicate"),
+        (["extra-row"], "missing.*locked-row.*extra.*extra-row"),
+    ],
+)
+def test_cli_rejects_non_bijective_artifact_joins_before_creating_a_report(
+    tmp_path, monkeypatch, artifact_ids, message
+):
+    """Duplicate, missing, or extra artifact rows must never become partial evidence."""
+    allowed_root = tmp_path / "outputs"
+    monkeypatch.setattr(eval_cli, "_REPORT_ROOT", allowed_root)
+    split_path = tmp_path / "test.csv"
+    split_path.write_text(
+        "record_id,converted_path,pair_type,split,review_status\n"
+        "locked-row,input.h5,A,test,approved\n",
+        encoding="utf-8",
+    )
+    artifacts_path = tmp_path / "reviewed-artifacts.csv"
+    with artifacts_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=(
+                "record_id",
+                "denoised_path",
+                "reference_path",
+                "legacy_output_path",
+            ),
+        )
+        writer.writeheader()
+        for artifact_id in artifact_ids:
+            writer.writerow(
+                {
+                    "record_id": artifact_id,
+                    "denoised_path": "denoised.h5",
+                    "reference_path": "reference.h5",
+                    "legacy_output_path": "legacy.h5",
+                }
+            )
+    destination = allowed_root / "invalid-join"
+
+    with pytest.raises(ValueError, match=message):
+        eval_cli.main(
+            [
+                "--split",
+                str(split_path),
+                "--artifacts",
+                str(artifacts_path),
+                "--output",
+                str(destination),
+            ]
+        )
+
+    assert not destination.exists()

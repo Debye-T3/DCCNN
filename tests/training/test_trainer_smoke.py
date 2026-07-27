@@ -12,6 +12,7 @@ import pytest
 import torch
 import xarray as xr
 
+from dccnn_arpes import safety
 from dccnn_arpes.data.discovery import write_manifest_csv
 from dccnn_arpes.data.pairing import PairRecord, read_pairs_csv, write_pairs_csv
 from dccnn_arpes.data.schema import ManifestRecord
@@ -28,7 +29,7 @@ from dccnn_arpes.training.config import (
     TrainConfig,
     TrainingConfig,
 )
-from dccnn_arpes.training.trainer import _dataset, _read_manifest, run_training
+from dccnn_arpes.training.trainer import _dataset, _provenance, _read_manifest, run_training
 
 
 def _write_cut_record(tmp_path, record_id, split, *, nonfinite=False):
@@ -256,6 +257,45 @@ def test_record_duplicated_across_partitions_is_rejected(tmp_path):
         run_training(replace(config, training=replace(config.training, epochs=1)))
 
 
+def test_connected_group_leakage_is_rejected_before_output_creation(tmp_path):
+    """Self-consistent split rows must not bypass sample/acquisition/source connectivity."""
+    config = _training_config(tmp_path)
+    train_record, val_record = _read_manifest(config.paths.manifest)
+    train_record = replace(train_record, sample_id="shared-sample")
+    val_record = replace(val_record, sample_id="shared-sample")
+    records = [train_record, val_record]
+    write_manifest_csv(records, config.paths.manifest)
+    write_manifest_csv([train_record], config.paths.splits / "train.csv")
+    write_manifest_csv([val_record], config.paths.splits / "val.csv")
+    _write_provenance(tmp_path, records)
+
+    with pytest.raises(ValueError, match="connected component.*multiple splits"):
+        run_training(replace(config, training=replace(config.training, epochs=1)))
+
+    assert not config.paths.output.exists()
+
+
+def test_training_rejects_output_inside_a_resolved_read_only_root_before_mkdir(
+    tmp_path, monkeypatch
+):
+    """Training must share the central guard and leave protected data roots untouched."""
+    config = _training_config(tmp_path)
+    read_only_root = tmp_path / "read-only"
+    read_only_root.mkdir()
+    forbidden_output = read_only_root / "training-runs"
+    monkeypatch.setattr(safety, "READ_ONLY_DATA_ROOTS", (read_only_root,))
+    config = replace(
+        config,
+        paths=replace(config.paths, output=forbidden_output),
+        training=replace(config.training, epochs=1),
+    )
+
+    with pytest.raises(ValueError, match="read-only data root"):
+        run_training(config)
+
+    assert not forbidden_output.exists()
+
+
 def test_reviewed_pair_endpoints_must_exist_in_master_manifest(tmp_path):
     """A malformed reviewed pair must not be silently discarded by split filtering."""
     config = _training_config(tmp_path)
@@ -344,6 +384,38 @@ def test_non_smoke_run_rejects_controlled_fixture_provenance(tmp_path):
 
     with pytest.raises(ValueError, match="reviewed_scientific_dataset"):
         run_training(replace(config, training=replace(config.training, epochs=1)))
+
+
+def test_same_manifest_selects_distinct_smoke_and_scientific_provenance_files(tmp_path):
+    """The run intent must select explicit authority instead of a fixed sibling filename."""
+    config = _training_config(tmp_path)
+    records = _read_manifest(config.paths.manifest)
+    default_provenance = tmp_path / "data_provenance.json"
+    smoke_provenance = tmp_path / "controlled-smoke-provenance.json"
+    scientific_provenance = tmp_path / "reviewed-scientific-provenance.json"
+    default_provenance.replace(smoke_provenance)
+    _write_provenance(tmp_path, records, classification="reviewed_scientific_dataset")
+    default_provenance.replace(scientific_provenance)
+    paths = replace(
+        config.paths,
+        provenance_path=scientific_provenance,
+        smoke_provenance_path=smoke_provenance,
+    )
+    file_hashes = {
+        record.record_id: hashlib.sha256(Path(record.converted_path).read_bytes()).hexdigest()
+        for record in records
+    }
+
+    smoke = replace(config, paths=paths).for_smoke_test(device="cpu")
+    scientific = replace(
+        config,
+        paths=paths,
+        smoke_test=False,
+        scientific_use=True,
+    )
+
+    assert _provenance(smoke, file_hashes)["classification"] == "controlled_smoke_fixture"
+    assert _provenance(scientific, file_hashes)["classification"] == "reviewed_scientific_dataset"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA runtime is unavailable")

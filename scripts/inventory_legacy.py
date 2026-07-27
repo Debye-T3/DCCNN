@@ -20,6 +20,21 @@ from pathlib import Path
 _CHECKPOINT_SUFFIXES = {".pt", ".pth", ".ckpt", ".tar"}
 _CONFIG_SUFFIXES = {".cfg", ".conf", ".ini", ".json", ".toml", ".yaml", ".yml"}
 _H5_SUFFIXES = {".h5", ".hdf5"}
+_PRUNED_DIRECTORY_NAMES = {
+    "__pycache__",
+    "cache",
+    "caches",
+    "configs",
+    "current",
+    "docs",
+    "env",
+    "node_modules",
+    "src",
+    "tests",
+    "venv",
+    "virtualenv",
+}
+_CURRENT_FILENAMES = {"pyproject.toml"}
 _FIELDNAMES = (
     "path",
     "type",
@@ -60,7 +75,9 @@ def _is_within(path: Path, root: Path) -> bool:
     return True
 
 
-def validate_locations(repo: Path, source: Path, archive: Path, output: Path) -> tuple[Path, Path, Path, Path]:
+def validate_locations(
+    repo: Path, source: Path, archive: Path, output: Path
+) -> tuple[Path, Path, Path, Path]:
     """Reject roots that could turn a later archive action into data loss."""
     repo_root = _resolved(repo, must_exist=True)
     source_root = _resolved(source, must_exist=True)
@@ -93,7 +110,9 @@ def _is_result_directory(path: Path, source_root: Path) -> bool:
     return any(part.casefold().startswith("result") for part in path.relative_to(source_root).parts)
 
 
-def _classify_file(path: Path) -> str:
+def _classify_file(path: Path) -> str | None:
+    if path.name.casefold() in _CURRENT_FILENAMES:
+        return None
     suffix = path.suffix.casefold()
     if suffix in _CHECKPOINT_SUFFIXES:
         return "checkpoint"
@@ -105,7 +124,7 @@ def _classify_file(path: Path) -> str:
         return "png"
     if suffix in _CONFIG_SUFFIXES:
         return "config"
-    return "other"
+    return None
 
 
 def _sha256(path: Path) -> str:
@@ -117,7 +136,11 @@ def _sha256(path: Path) -> str:
 
 
 def _modified_utc(timestamp: float) -> str:
-    return datetime.fromtimestamp(timestamp, UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    return (
+        datetime.fromtimestamp(timestamp, UTC)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
 
 
 def _is_redirect(path: Path) -> bool:
@@ -132,10 +155,17 @@ def _iter_legacy_paths(directory: Path, source_root: Path | None = None) -> Iter
         if _is_redirect(path):
             continue
         if path.is_dir():
+            name = path.name.casefold()
+            if (
+                name.startswith(".")
+                or name in _PRUNED_DIRECTORY_NAMES
+                or (path / "pyvenv.cfg").is_file()
+            ):
+                continue
             if _is_result_directory(path, source_root):
                 yield path
             yield from _iter_legacy_paths(path, source_root)
-        elif path.is_file():
+        elif path.is_file() and not path.name.startswith(".") and _classify_file(path) is not None:
             yield path
 
 
@@ -148,6 +178,8 @@ def inventory_legacy(source_root: Path, archive_root: Path) -> list[InventoryEnt
         relative = path.relative_to(source_root).as_posix()
         checksum = _sha256(path) if path.is_file() else ""
         asset_type = "result_directory" if path.is_dir() else _classify_file(path)
+        if asset_type is None:
+            continue
         proposed_destination = (resolved_archive_root / relative).resolve(strict=False)
         if not _is_within(proposed_destination, resolved_archive_root):
             raise ValueError("proposed destination resolves outside the archive root")
@@ -165,7 +197,9 @@ def inventory_legacy(source_root: Path, archive_root: Path) -> list[InventoryEnt
 
     duplicate_counts = Counter(entry.sha256 for entry in entries if entry.sha256)
     duplicate_hashes = sorted(checksum for checksum, count in duplicate_counts.items() if count > 1)
-    duplicate_groups = {checksum: f"duplicate-{index:04d}" for index, checksum in enumerate(duplicate_hashes, 1)}
+    duplicate_groups = {
+        checksum: f"duplicate-{index:04d}" for index, checksum in enumerate(duplicate_hashes, 1)
+    }
     return [
         replace(entry, duplicate_group=duplicate_groups.get(entry.sha256, "")) for entry in entries
     ]
@@ -204,12 +238,18 @@ def write_inventory(entries: Sequence[InventoryEntry], output: Path) -> None:
 def main(argv: Sequence[str] | None = None) -> None:
     """Run the reporting-only legacy inventory command."""
     parser = argparse.ArgumentParser(description="Create a read-only legacy asset inventory.")
-    parser.add_argument("--repo", required=True, type=Path, help="Repository root containing legacy assets.")
+    parser.add_argument(
+        "--repo", required=True, type=Path, help="Repository root containing legacy assets."
+    )
     parser.add_argument(
         "--source", type=Path, help="Optional legacy source subtree; defaults to --repo."
     )
-    parser.add_argument("--archive", required=True, type=Path, help="Proposed archive root; never created.")
-    parser.add_argument("--output", required=True, type=Path, help="CSV report written outside source data.")
+    parser.add_argument(
+        "--archive", required=True, type=Path, help="Proposed archive root; never created."
+    )
+    parser.add_argument(
+        "--output", required=True, type=Path, help="CSV report written outside source data."
+    )
     arguments = parser.parse_args(argv)
     source = arguments.source or arguments.repo
     try:

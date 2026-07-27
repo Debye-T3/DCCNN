@@ -22,7 +22,9 @@ from dccnn_arpes.data.dataset import ArpesCutDataset
 from dccnn_arpes.data.noise import NoiseParameters
 from dccnn_arpes.data.pairing import PAIR_FIELDNAMES, PairRecord
 from dccnn_arpes.data.schema import MANIFEST_FIELDNAMES, ManifestRecord
+from dccnn_arpes.data.splitting import leakage_audit
 from dccnn_arpes.models import ResidualDenoiser2D, denoise_forward
+from dccnn_arpes.safety import guard_output_path
 
 from .checkpoints import save_checkpoint
 from .config import NoiseConfig, TrainConfig
@@ -364,6 +366,23 @@ def _validate_partitions(
             )
 
 
+def _preflight_split_audit(config: TrainConfig) -> list[ManifestRecord]:
+    """Reject self-consistent but connectivity-leaking splits before creating a run."""
+    master_records = _read_manifest(config.paths.manifest)
+    partitions = {
+        split: _read_manifest(config.paths.splits / f"{split}.csv")
+        for split in ("train", "val", "test")
+    }
+    _validate_partitions(master_records, partitions)
+    pairs = _read_pairs(config.paths.pairs)
+    _validate_pairs(pairs, master_records)
+    pair_links = [(pair.left_record_id, pair.right_record_id) for pair in pairs]
+    audit = leakage_audit(master_records, pair_links)
+    if not audit["leakage_free"]:
+        raise ValueError("a connected component appears in multiple splits")
+    return master_records
+
+
 def _dataset(
     records: list[ManifestRecord], pairs: list[PairRecord], config: TrainConfig
 ) -> ArpesCutDataset:
@@ -454,8 +473,12 @@ def _epoch(
     return {name: value / batches for name, value in totals.items()}
 
 
+def _provenance_path(config: TrainConfig) -> Path:
+    return config.paths.provenance_path or config.paths.manifest.parent / "data_provenance.json"
+
+
 def _provenance(config: TrainConfig, file_hashes: dict[str, str]) -> dict[str, object]:
-    path = config.paths.manifest.parent / "data_provenance.json"
+    path = _provenance_path(config)
     if not path.is_file():
         raise FileNotFoundError(f"required data provenance file does not exist: {path}")
     try:
@@ -547,7 +570,7 @@ def _run_training_body(
         "pairs_sha256": pairs_hash,
         "data_sha256": data_hash,
     }
-    provenance_path = config.paths.manifest.parent / "data_provenance.json"
+    provenance_path = _provenance_path(config)
     provenance = _provenance(config, file_hashes)
     hashes["provenance_sha256"] = _sha256(provenance_path)
 
@@ -564,6 +587,7 @@ def _run_training_body(
             "cuda_version": versions["cuda"],
             "device": versions["device"],
             "data_provenance": provenance,
+            "data_provenance_path": str(provenance_path),
             "data_file_sha256": file_hashes,
         }
     )
@@ -665,12 +689,26 @@ def _run_training_body(
 
 def run_training(config: TrainConfig) -> TrainingResult:
     """Train a residual denoiser and atomically record the complete run lifecycle."""
+    master_records = _preflight_split_audit(config)
+    output_root = guard_output_path(
+        config.paths.output,
+        input_sources=(
+            config.paths.manifest,
+            config.paths.pairs,
+            config.paths.splits,
+            *(record.source_path for record in master_records if record.source_path),
+            *(record.converted_path for record in master_records if record.converted_path),
+        ),
+    )
     config_material = json.dumps(config.as_dict(), sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
     )
     config_hash = hashlib.sha256(config_material).hexdigest()
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-    output = config.paths.output / f"{timestamp}-{config_hash[:12]}"
+    output = guard_output_path(
+        output_root / f"{timestamp}-{config_hash[:12]}",
+        input_sources=(config.paths.manifest, config.paths.pairs, config.paths.splits),
+    )
     output.mkdir(parents=True, exist_ok=False)
     run_path = output / "run.json"
     run: dict[str, object] = {

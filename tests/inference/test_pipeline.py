@@ -7,6 +7,7 @@ import pytest
 import torch
 import xarray as xr
 
+from dccnn_arpes import safety
 from dccnn_arpes.inference import denoise_file
 from dccnn_arpes.inference import pipeline as inference_pipeline
 from dccnn_arpes.io import write_cut, xarray_h5
@@ -95,6 +96,25 @@ def test_denoise_file_refuses_to_overwrite_existing_destination(tmp_path, canoni
         denoise_file(input_path, checkpoint_path, output_dir)
 
     assert _sha256(destination) == destination_hash
+
+
+def test_denoise_file_rejects_output_inside_a_resolved_read_only_root(
+    tmp_path, canonical_cut, monkeypatch
+):
+    """Inference must apply the central output guard before creating its destination."""
+    input_path = tmp_path / "cut001.h5"
+    checkpoint_path = tmp_path / "best.pt"
+    read_only_root = tmp_path / "read-only"
+    output_dir = read_only_root / "denoised"
+    write_cut(canonical_cut, input_path)
+    _smoke_checkpoint(checkpoint_path)
+    read_only_root.mkdir()
+    monkeypatch.setattr(safety, "READ_ONLY_DATA_ROOTS", (read_only_root,))
+
+    with pytest.raises(ValueError, match="read-only data root"):
+        denoise_file(input_path, checkpoint_path, output_dir)
+
+    assert not output_dir.exists()
 
 
 def test_denoise_file_records_the_exact_checkpoint_snapshot_used(

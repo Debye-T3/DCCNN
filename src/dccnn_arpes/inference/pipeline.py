@@ -18,6 +18,7 @@ import xarray as xr
 from dccnn_arpes.data.transforms import IntensityTransform
 from dccnn_arpes.io import load_cut, write_cut
 from dccnn_arpes.models import ResidualDenoiser2D
+from dccnn_arpes.safety import guard_output_path
 from dccnn_arpes.training.checkpoints import CheckpointState, load_checkpoint
 
 from .tiling import tiled_predict
@@ -84,8 +85,14 @@ def denoise_file(input_path: Path, checkpoint_path: Path, output_dir: Path) -> P
     """Denoise one canonical cut to a new atomic HDF5 artifact."""
     source = Path(input_path)
     checkpoint = Path(checkpoint_path)
-    destination_directory = Path(output_dir)
-    destination = destination_directory / f"{source.stem}_denoised.h5"
+    destination_directory = guard_output_path(
+        output_dir,
+        input_sources=(source, checkpoint),
+    )
+    destination = guard_output_path(
+        destination_directory / f"{source.stem}_denoised.h5",
+        input_sources=(source, checkpoint),
+    )
     if destination.exists():
         raise FileExistsError(f"refusing to overwrite existing file {destination}")
 

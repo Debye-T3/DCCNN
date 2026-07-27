@@ -166,6 +166,23 @@ def _scientific_gate(cases: list[EvaluationCase]) -> dict[str, object]:
     ]
     if non_scientific:
         reasons.append(f"{len(non_scientific)} residual outputs have non-scientific intent")
+    checkpoint_values: dict[str, str] = {}
+    missing_checkpoint = []
+    for case in cases:
+        value = (
+            case.output_da.attrs.get("denoising_checkpoint_sha256")
+            if case.output_da is not None
+            else None
+        )
+        if not isinstance(value, str) or not value.strip():
+            missing_checkpoint.append(case.record_id)
+            continue
+        checkpoint_values[case.record_id] = value.strip().casefold()
+    observed_checkpoints = sorted(set(checkpoint_values.values()))
+    if missing_checkpoint:
+        reasons.append(f"{len(missing_checkpoint)} residual outputs are missing checkpoint SHA-256")
+    if len(observed_checkpoints) > 1:
+        reasons.append("residual outputs contain multiple checkpoint SHA-256 values")
     return {
         "pass": not reasons,
         "reason": "; ".join(reasons)
@@ -174,6 +191,11 @@ def _scientific_gate(cases: list[EvaluationCase]) -> dict[str, object]:
         "ineligible_record_ids": ineligible,
         "missing_artifact_record_ids": missing,
         "non_scientific_record_ids": non_scientific,
+        "checkpoint_sha256": {
+            "expected": "one non-empty SHA-256 shared by every residual output",
+            "observed": observed_checkpoints,
+            "missing_record_ids": missing_checkpoint,
+        },
     }
 
 

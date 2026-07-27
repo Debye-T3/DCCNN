@@ -8,13 +8,13 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import numpy as np
-import yaml
 
 from dccnn_arpes.evaluation import EvaluationCase, generate_evaluation_report
 from dccnn_arpes.io import load_cut
 
 _REPORT_ROOT = Path(r"D:\Projects\dccnn\outputs")
 _SCIENTIFIC_REVIEWS = {"reviewed", "approved", "manually_approved"}
+_ARTIFACT_PATH_FIELDS = ("denoised_path", "reference_path", "legacy_output_path")
 
 
 def _optional_float(row: Mapping[str, str], name: str) -> float | None:
@@ -121,26 +121,101 @@ def _validate_output_path(output: Path) -> Path:
     return destination
 
 
+def _index_unique_rows(
+    rows: list[dict[str, str]],
+    key: str,
+    *,
+    context: str,
+) -> dict[str, dict[str, str]]:
+    indexed: dict[str, dict[str, str]] = {}
+    duplicates: set[str] = set()
+    for row in rows:
+        value = row.get(key, "").strip()
+        if not value:
+            raise ValueError(f"{context} must contain a non-empty {key} for every row")
+        if value in indexed:
+            duplicates.add(value)
+        indexed[value] = row
+    if duplicates:
+        raise ValueError(f"{context} has duplicate {key} value(s): {', '.join(sorted(duplicates))}")
+    return indexed
+
+
+def _join_artifacts(
+    split_rows: list[dict[str, str]],
+    split_fields: Sequence[str],
+    artifacts_path: Path,
+) -> list[dict[str, str]]:
+    with artifacts_path.open(encoding="utf-8", newline="") as stream:
+        reader = csv.DictReader(stream)
+        artifact_fields = tuple(reader.fieldnames or ())
+        missing_fields = set(_ARTIFACT_PATH_FIELDS).difference(artifact_fields)
+        if missing_fields:
+            raise ValueError(
+                "artifacts CSV is missing required field(s): " + ", ".join(sorted(missing_fields))
+            )
+        artifacts = list(reader)
+    join_key = next(
+        (
+            candidate
+            for candidate in ("record_id", "file_id")
+            if candidate in artifact_fields and candidate in split_fields
+        ),
+        None,
+    )
+    if join_key is None:
+        raise ValueError("artifacts CSV must join the split by record_id or file_id")
+    split_by_key = _index_unique_rows(split_rows, join_key, context="split CSV")
+    artifacts_by_key = _index_unique_rows(artifacts, join_key, context="artifacts CSV")
+    missing = sorted(set(split_by_key).difference(artifacts_by_key))
+    extra = sorted(set(artifacts_by_key).difference(split_by_key))
+    if missing or extra:
+        raise ValueError(
+            "artifact join is not one-to-one; "
+            f"missing keys: {', '.join(missing) or '<none>'}; "
+            f"extra keys: {', '.join(extra) or '<none>'}"
+        )
+
+    joined: list[dict[str, str]] = []
+    for split_row in split_rows:
+        key_value = split_row[join_key].strip()
+        artifact_row = artifacts_by_key[key_value]
+        merged = dict(split_row)
+        for field in _ARTIFACT_PATH_FIELDS:
+            value = artifact_row.get(field, "").strip()
+            if not value:
+                raise ValueError(f"artifacts CSV {join_key} {key_value!r} has an empty {field}")
+            path = Path(value)
+            if not path.is_absolute():
+                path = artifacts_path.parent / path
+            merged[field] = str(path.resolve(strict=False))
+        joined.append(merged)
+    return joined
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Run the evaluation command-line interface."""
     parser = argparse.ArgumentParser(description="Evaluate an ARPES denoising model.")
-    parser.add_argument("--config", required=True, help="Training/evaluation YAML config.")
     parser.add_argument("--split", required=True, help="Locked test-manifest CSV.")
+    parser.add_argument(
+        "--artifacts",
+        help=(
+            "Optional reviewed CSV joined one-to-one by record_id or file_id with "
+            "denoised_path, reference_path, and legacy_output_path."
+        ),
+    )
     parser.add_argument("--output", required=True, help="Report directory under DCCNN outputs.")
     args = parser.parse_args(argv)
-
-    config_path = Path(args.config)
-    with config_path.open(encoding="utf-8") as stream:
-        config = yaml.safe_load(stream)
-    if not isinstance(config, dict):
-        raise TypeError("config must contain a YAML mapping")
 
     split_path = Path(args.split)
     with split_path.open(encoding="utf-8", newline="") as stream:
         reader = csv.DictReader(stream)
         if reader.fieldnames is None or "record_id" not in reader.fieldnames:
             raise ValueError("split CSV must contain record_id")
+        split_fields = tuple(reader.fieldnames)
         rows = list(reader)
+    if args.artifacts:
+        rows = _join_artifacts(rows, split_fields, Path(args.artifacts))
     cases = [_case_from_row(row, split_path.parent) for row in rows]
     destination = _validate_output_path(Path(args.output))
     acceptance = generate_evaluation_report(

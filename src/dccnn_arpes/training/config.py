@@ -10,10 +10,17 @@ from typing import Any
 import yaml
 
 
-def _keys(mapping: object, required: set[str], context: str) -> dict[str, Any]:
+def _keys(
+    mapping: object,
+    required: set[str],
+    context: str,
+    *,
+    optional: set[str] | None = None,
+) -> dict[str, Any]:
     if not isinstance(mapping, dict):
         raise TypeError(f"{context} must be a mapping")
-    unknown = set(mapping).difference(required)
+    allowed = required | (optional or set())
+    unknown = set(mapping).difference(allowed)
     missing = required.difference(mapping)
     if unknown:
         raise ValueError(f"{context} has unknown key(s): {', '.join(sorted(unknown))}")
@@ -64,10 +71,20 @@ class PathConfig:
     pairs: Path
     splits: Path
     output: Path
+    provenance_path: Path | None = None
+    smoke_provenance_path: Path | None = None
 
     def __post_init__(self) -> None:
-        for field in ("manifest", "pairs", "splits", "output"):
-            object.__setattr__(self, field, Path(getattr(self, field)))
+        for field in (
+            "manifest",
+            "pairs",
+            "splits",
+            "output",
+            "provenance_path",
+            "smoke_provenance_path",
+        ):
+            value = getattr(self, field)
+            object.__setattr__(self, field, None if value is None else Path(value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,7 +249,9 @@ class TrainConfig:
 
     def as_dict(self) -> dict[str, object]:
         result = asdict(self)
-        result["paths"] = {key: str(value) for key, value in result["paths"].items()}
+        result["paths"] = {
+            key: None if value is None else str(value) for key, value in result["paths"].items()
+        }
         result["data"]["sampling"] = self.data.sampling.as_dict()
         return result
 
@@ -246,7 +265,11 @@ class TrainConfig:
         )
         return replace(
             self,
-            paths=replace(self.paths, output=self.paths.output / "smoke"),
+            paths=replace(
+                self.paths,
+                output=self.paths.output / "smoke",
+                provenance_path=self.paths.smoke_provenance_path or self.paths.provenance_path,
+            ),
             model=replace(self.model, channels=4, blocks=1),
             data=replace(self.data, samples_per_epoch=2),
             training=training,
@@ -264,7 +287,12 @@ def load_train_config(path: str | Path) -> TrainConfig:
             {"paths", "seed", "model", "data", "training", "loss"},
             "config",
         )
-    paths = _keys(root["paths"], {"manifest", "pairs", "splits", "output"}, "paths")
+    paths = _keys(
+        root["paths"],
+        {"manifest", "pairs", "splits", "output"},
+        "paths",
+        optional={"provenance_path", "smoke_provenance_path"},
+    )
     model = _keys(root["model"], {"name", "channels", "blocks"}, "model")
     data = _keys(
         root["data"],
@@ -301,7 +329,20 @@ def load_train_config(path: str | Path) -> TrainConfig:
         raise ValueError("data.crop_size must contain exactly two values")
     return TrainConfig(
         paths=PathConfig(
-            **{key: Path(_text(value, f"paths.{key}")) for key, value in paths.items()}
+            manifest=Path(_text(paths["manifest"], "paths.manifest")),
+            pairs=Path(_text(paths["pairs"], "paths.pairs")),
+            splits=Path(_text(paths["splits"], "paths.splits")),
+            output=Path(_text(paths["output"], "paths.output")),
+            provenance_path=(
+                Path(_text(paths["provenance_path"], "paths.provenance_path"))
+                if "provenance_path" in paths
+                else None
+            ),
+            smoke_provenance_path=(
+                Path(_text(paths["smoke_provenance_path"], "paths.smoke_provenance_path"))
+                if "smoke_provenance_path" in paths
+                else None
+            ),
         ),
         seed=_integer(root["seed"], "seed"),
         model=ModelConfig(
