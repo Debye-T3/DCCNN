@@ -104,7 +104,7 @@ def _case_from_row(row: Mapping[str, str], split_directory: Path) -> EvaluationC
         pair_type=row.get("pair_type", "").strip(),
         temperature_K=temperature,
         temperature_group=temperature_group,
-        measurement_uncertainty=uncertainty or 0.0,
+        measurement_uncertainty=uncertainty,
         high_quality_identity=high_quality,
         manually_flagged=manually_flagged,
         manual_flag_reason=row.get("manual_flag_reason", "").strip(),

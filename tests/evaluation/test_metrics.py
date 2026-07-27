@@ -137,3 +137,26 @@ def test_noise_only_region_reduction_uses_input_and_output_residuals():
     metrics = evaluate_pair(noisy, improved, reference)
 
     assert metrics["noise_only_region_reduction"] == pytest.approx(0.75, rel=1e-6)
+
+
+@pytest.mark.parametrize("profile_kind", ["monotonic", "boundary", "unidentifiable"])
+def test_non_identifiable_profiles_are_failed_fits_with_nan_width(profile_kind):
+    """Monotonic, boundary-only, or axis-wider peaks must not earn a physical FWHM."""
+    template = _gaussian_cut()
+    eV = np.asarray(template.eV.values)
+    alpha = np.asarray(template.alpha.values)
+    if profile_kind == "monotonic":
+        energy_profile = np.linspace(0.0, 1.0, eV.size)
+    elif profile_kind == "boundary":
+        energy_profile = np.exp(-0.5 * ((eV - eV[0]) / 0.12) ** 2)
+    else:
+        energy_profile = np.exp(-0.5 * (eV / 3.0) ** 2)
+    angle_profile = np.exp(-0.5 * ((alpha + 0.28) / 0.31) ** 2)
+    values = 0.08 + 4.2 * energy_profile[:, None] * angle_profile[None, :]
+    cut = template.copy(data=values)
+
+    metrics = evaluate_pair(cut, cut.copy(deep=True), cut.copy(deep=True))
+
+    assert metrics["fit_status"] == "failed"
+    assert "eV" in metrics["fit_failure_reason"]
+    assert np.isnan(metrics["reference_fwhm_eV"])

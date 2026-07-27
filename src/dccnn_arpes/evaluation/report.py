@@ -86,7 +86,7 @@ class EvaluationCase:
     pair_type: str = ""
     temperature_K: float | None = None
     temperature_group: str = ""
-    measurement_uncertainty: float = 0.0
+    measurement_uncertainty: float | None = None
     high_quality_identity: bool = False
     manually_flagged: bool = False
     manual_flag_reason: str = ""
@@ -98,7 +98,9 @@ class EvaluationCase:
             raise ValueError("record_id must be non-empty")
         if self.temperature_K is not None and not np.isfinite(self.temperature_K):
             raise ValueError("temperature_K must be finite when provided")
-        if not np.isfinite(self.measurement_uncertainty) or self.measurement_uncertainty < 0:
+        if self.measurement_uncertainty is not None and (
+            not np.isfinite(self.measurement_uncertainty) or self.measurement_uncertainty < 0
+        ):
             raise ValueError("measurement_uncertainty must be finite and non-negative")
 
 
@@ -488,6 +490,21 @@ def _write_figures(
         _write_profile_figure(case, arrays, "alpha", figure_dir / f"{stem}_mdc.png")
 
 
+def _peak_candidates(profile: np.ndarray, prominence: float) -> list[tuple[int, float]]:
+    peaks, properties = find_peaks(profile, prominence=prominence)
+    candidates = [
+        (int(peak), float(value))
+        for peak, value in zip(peaks, properties["prominences"], strict=True)
+    ]
+    left_prominence = float(profile[0] - np.min(profile[1:]))
+    if left_prominence > prominence:
+        candidates.append((0, left_prominence))
+    right_prominence = float(profile[-1] - np.min(profile[:-1]))
+    if right_prominence > prominence:
+        candidates.append((profile.size - 1, right_prominence))
+    return candidates
+
+
 def _new_peak_reasons(case: EvaluationCase) -> list[str]:
     if (
         case.output_da is None
@@ -500,18 +517,13 @@ def _new_peak_reasons(case: EvaluationCase) -> list[str]:
         coordinate, reference_profile = _profile(case.reference_da, axis)
         _, output_profile = _profile(case.output_da, axis)
         reference_prominence = 0.05 * float(np.max(reference_profile))
-        reference_peaks, _ = find_peaks(reference_profile, prominence=reference_prominence)
-        output_peaks, output_properties = find_peaks(
-            output_profile,
-            prominence=reference_prominence,
-        )
-        for peak, prominence in zip(
-            output_peaks,
-            output_properties["prominences"],
-            strict=True,
-        ):
-            if reference_peaks.size and np.min(
-                np.abs(coordinate[reference_peaks] - coordinate[peak])
+        reference_peaks = _peak_candidates(reference_profile, reference_prominence)
+        for peak, prominence in _peak_candidates(output_profile, reference_prominence):
+            if reference_peaks and np.min(
+                np.abs(
+                    coordinate[[reference_peak for reference_peak, _ in reference_peaks]]
+                    - coordinate[peak]
+                )
             ) <= (1.01 * _sampling_step(case.reference_da, axis)):
                 continue
             reasons.append(
@@ -621,11 +633,24 @@ def _feature_values(data: xr.DataArray | None) -> dict[str, float | str]:
 def _temperature_trends(cases: list[EvaluationCase]) -> dict[str, object]:
     groups: dict[str, list[EvaluationCase]] = {}
     for case in cases:
-        if case.temperature_group and case.temperature_K is not None:
+        if case.temperature_group:
             groups.setdefault(case.temperature_group, []).append(case)
     result: dict[str, object] = {}
     for group_name, unordered in sorted(groups.items()):
-        ordered = sorted(unordered, key=lambda case: (float(case.temperature_K), case.record_id))
+        ordered = sorted(
+            unordered,
+            key=lambda case: (
+                case.temperature_K is None,
+                float(case.temperature_K) if case.temperature_K is not None else np.inf,
+                case.record_id,
+            ),
+        )
+        missing_temperature_ids = sorted(
+            case.record_id for case in ordered if case.temperature_K is None
+        )
+        missing_uncertainty_ids = sorted(
+            case.record_id for case in ordered if case.measurement_uncertainty is None
+        )
         samples: list[dict[str, object]] = []
         features_by_source = {
             "input": {name: [] for name in _FEATURE_NAMES},
@@ -652,36 +677,54 @@ def _temperature_trends(cases: list[EvaluationCase]) -> dict[str, object]:
                 features_by_source["output"][name].append(float(output_features[name]))
             samples.append(sample)
 
-        temperatures = np.asarray([float(case.temperature_K) for case in ordered])
+        temperatures = np.asarray(
+            [
+                float(case.temperature_K) if case.temperature_K is not None else np.nan
+                for case in ordered
+            ]
+        )
         feature_evidence: dict[str, object] = {}
         for name in _FEATURE_NAMES:
             input_values = np.asarray(features_by_source["input"][name], dtype=np.float64)
             output_values = np.asarray(features_by_source["output"][name], dtype=np.float64)
-            finite = np.isfinite(input_values) & np.isfinite(output_values)
+            finite = (
+                np.isfinite(temperatures) & np.isfinite(input_values) & np.isfinite(output_values)
+            )
+            valid_indices = np.flatnonzero(finite)
             evaluated_pair_count = int(np.count_nonzero(finite))
             unique_temperature_count = int(np.unique(temperatures[finite]).size)
             reversed_direction = False
             input_slope = output_slope = np.nan
             jump_violations: list[dict[str, object]] = []
             if evaluated_pair_count >= 2 and unique_temperature_count >= 2:
-                input_slope = float(np.polyfit(temperatures[finite], input_values[finite], 1)[0])
-                output_slope = float(np.polyfit(temperatures[finite], output_values[finite], 1)[0])
-                scale = max(float(np.max(np.abs(input_values[finite]))), 1.0)
+                valid_temperatures = temperatures[finite]
+                valid_input = input_values[finite]
+                valid_output = output_values[finite]
+                input_slope = float(np.polyfit(valid_temperatures, valid_input, 1)[0])
+                output_slope = float(np.polyfit(valid_temperatures, valid_output, 1)[0])
+                scale = max(float(np.max(np.abs(valid_input))), 1.0)
                 slope_tolerance = np.finfo(np.float64).eps * scale
                 reversed_direction = (
                     abs(input_slope) > slope_tolerance
                     and abs(output_slope) > slope_tolerance
                     and np.sign(input_slope) != np.sign(output_slope)
                 )
-                input_jumps = np.abs(np.diff(input_values))
+                input_jumps = np.abs(np.diff(valid_input))
                 finite_input_jumps = input_jumps[np.isfinite(input_jumps)]
                 median_input_jump = (
                     float(np.median(finite_input_jumps)) if finite_input_jumps.size else np.nan
                 )
-                for index, output_jump in enumerate(np.abs(np.diff(output_values))):
+                for index, output_jump in enumerate(np.abs(np.diff(valid_output))):
+                    left = ordered[int(valid_indices[index])]
+                    right = ordered[int(valid_indices[index + 1])]
+                    if (
+                        left.measurement_uncertainty is None
+                        or right.measurement_uncertainty is None
+                    ):
+                        continue
                     uncertainty = max(
-                        ordered[index].measurement_uncertainty,
-                        ordered[index + 1].measurement_uncertainty,
+                        left.measurement_uncertainty,
+                        right.measurement_uncertainty,
                     )
                     if (
                         np.isfinite(output_jump)
@@ -691,8 +734,8 @@ def _temperature_trends(cases: list[EvaluationCase]) -> dict[str, object]:
                     ):
                         jump_violations.append(
                             {
-                                "left_record_id": ordered[index].record_id,
-                                "right_record_id": ordered[index + 1].record_id,
+                                "left_record_id": left.record_id,
+                                "right_record_id": right.record_id,
                                 "output_jump": float(output_jump),
                                 "three_times_input_median_jump": 3.0 * median_input_jump,
                                 "measurement_uncertainty": uncertainty,
@@ -710,6 +753,8 @@ def _temperature_trends(cases: list[EvaluationCase]) -> dict[str, object]:
         result[group_name] = {
             "samples": samples,
             "features": feature_evidence,
+            "missing_temperature_record_ids": missing_temperature_ids,
+            "missing_measurement_uncertainty_record_ids": missing_uncertainty_ids,
         }
     return {"groups": result}
 
@@ -1045,6 +1090,16 @@ def _acceptance(
         )
 
     trend_groups = trends["groups"]
+    missing_temperature_ids = sorted(
+        record_id
+        for group in trend_groups.values()
+        for record_id in group["missing_temperature_record_ids"]
+    )
+    missing_uncertainty_ids = sorted(
+        record_id
+        for group in trend_groups.values()
+        for record_id in group["missing_measurement_uncertainty_record_ids"]
+    )
     incomplete_features: list[dict[str, object]] = []
     for group_name, group in trend_groups.items():
         if len(group["samples"]) < 2:
@@ -1084,16 +1139,24 @@ def _acceptance(
                     direction_reversals.append({"group": group_name, "feature": feature})
                 for violation in evidence["jump_violations"]:
                     jump_violations.append({"group": group_name, "feature": feature, **violation})
+        incomplete_groups = {item["group"] for item in incomplete_features}
+        incomplete_groups.update(
+            group_name
+            for group_name, group in trend_groups.items()
+            if group["missing_temperature_record_ids"]
+            or group["missing_measurement_uncertainty_record_ids"]
+        )
         evidence = {
             "required_group_count": len(trend_groups),
-            "evaluated_group_count": len(trend_groups)
-            - len({item["group"] for item in incomplete_features}),
+            "evaluated_group_count": len(trend_groups) - len(incomplete_groups),
             "incomplete_features": incomplete_features,
+            "missing_temperature_record_ids": missing_temperature_ids,
+            "missing_measurement_uncertainty_record_ids": missing_uncertainty_ids,
             "direction_reversals": direction_reversals,
             "jump_violations": jump_violations,
             "jump_factor_threshold": 3.0,
         }
-        if incomplete_features:
+        if incomplete_features or missing_temperature_ids or missing_uncertainty_ids:
             rules["7_temperature_trends"] = _not_evaluated(
                 evidence,
                 _RULE_TEXT["7_temperature_trends"],
@@ -1110,6 +1173,8 @@ def _acceptance(
                 "required_group_count": 0,
                 "evaluated_group_count": 0,
                 "incomplete_features": [],
+                "missing_temperature_record_ids": [],
+                "missing_measurement_uncertainty_record_ids": [],
                 "jump_factor_threshold": 3.0,
             },
             _RULE_TEXT["7_temperature_trends"],
@@ -1120,16 +1185,13 @@ def _acceptance(
     failed_ids = {
         record_id
         for record_id, row in residual.items()
-        if row["fit_status"] == "failed"
-        and record_id not in manual_flagged_ids
-        and record_id not in automated_review_ids
+        if row["fit_status"] == "failed" and record_id not in manual_flagged_ids
     }
     evaluated_ids = {
         record_id
         for record_id, row in residual.items()
         if row["evaluation_status"] == "evaluated"
         and record_id not in manual_flagged_ids
-        and record_id not in automated_review_ids
         and record_id not in failed_ids
     }
     not_evaluated_ids = {case.record_id for case in cases}.difference(

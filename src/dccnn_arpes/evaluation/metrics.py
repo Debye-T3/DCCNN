@@ -107,10 +107,24 @@ def _fit_peak(coordinate: np.ndarray, profile: np.ndarray) -> _PeakFit:
     order = np.argsort(coordinate)
     x = coordinate[order]
     y = profile[order]
+    peak_index = int(np.argmax(y))
+    if peak_index == 0 or peak_index == y.size - 1:
+        return _PeakFit("failed", "profile maximum is not an internal peak", np.nan, np.nan)
     baseline = float(np.percentile(y, 10.0))
     weights = np.clip(y - baseline, 0.0, None)
     if float(weights.sum()) <= np.finfo(np.float64).eps * scale:
         return _PeakFit("failed", "profile has no positive peak above baseline", np.nan, np.nan)
+    prominence = float(
+        y[peak_index]
+        - max(
+            np.min(y[: peak_index + 1]),
+            np.min(y[peak_index:]),
+        )
+    )
+    if prominence < max(0.05 * profile_range, 10.0 * np.finfo(np.float64).eps * scale):
+        return _PeakFit(
+            "failed", "profile peak is not identifiable above both sides", np.nan, np.nan
+        )
     center = float(x[np.argmax(y)])
     weighted_sigma = float(
         np.sqrt(
@@ -121,7 +135,7 @@ def _fit_peak(coordinate: np.ndarray, profile: np.ndarray) -> _PeakFit:
     sampling_step = float(np.min(np.abs(np.diff(x))))
     initial_sigma = min(max(weighted_sigma, sampling_step), span / 2.0)
     try:
-        parameters, _ = curve_fit(
+        parameters, covariance = curve_fit(
             _gaussian_with_offset,
             x,
             y,
@@ -138,6 +152,30 @@ def _fit_peak(coordinate: np.ndarray, profile: np.ndarray) -> _PeakFit:
     fitted_fwhm = float(abs(parameters[3]) * _FWHM_FACTOR)
     if not np.isfinite(fitted_center) or not np.isfinite(fitted_fwhm) or fitted_fwhm <= 0:
         return _PeakFit("failed", "Gaussian fit returned invalid parameters", np.nan, np.nan)
+    if not np.isfinite(covariance).all():
+        return _PeakFit("failed", "Gaussian fit covariance is not finite", np.nan, np.nan)
+    if (
+        fitted_fwhm > span
+        or fitted_center - fitted_fwhm / 2.0 < x[0]
+        or fitted_center + fitted_fwhm / 2.0 > x[-1]
+    ):
+        return _PeakFit(
+            "failed",
+            "Gaussian FWHM is not identifiable within the coordinate span",
+            np.nan,
+            np.nan,
+        )
+    fitted = _gaussian_with_offset(x, *parameters)
+    total_variation = float(np.sum(np.square(y - np.mean(y))))
+    residual_variation = float(np.sum(np.square(y - fitted)))
+    fit_quality = 1.0 - residual_variation / total_variation if total_variation > 0 else -np.inf
+    if not np.isfinite(fit_quality) or fit_quality < 0.80:
+        return _PeakFit(
+            "failed",
+            f"Gaussian fit quality is insufficient (R^2={fit_quality:.6g})",
+            np.nan,
+            np.nan,
+        )
     return _PeakFit("ok", "", fitted_center, fitted_fwhm)
 
 

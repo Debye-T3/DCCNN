@@ -223,7 +223,31 @@ def test_high_quality_peak_shift_above_one_sampling_step_requires_review(tmp_pat
     reconciliation = acceptance["rules"]["8_manifest_reconciliation"]["evidence"]
     assert reconciliation["manually_flagged"] == 0
     assert reconciliation["automated_review_required"] == 1
-    assert reconciliation["not_evaluated_record_ids"] == ["shifted-identity"]
+    assert reconciliation["evaluated"] == 1
+    assert reconciliation["not_evaluated"] == 0
+    assert reconciliation["not_evaluated_record_ids"] == []
+
+
+@pytest.mark.parametrize("endpoint_width", [1, 3])
+def test_high_quality_endpoint_peak_above_five_percent_requires_review(tmp_path, endpoint_width):
+    """Endpoint peaks must not escape detection because scipy find_peaks omits endpoints."""
+    reference = _cut()
+    output = reference.copy(deep=True)
+    output.values[:endpoint_width, :] += 0.5
+    case = _case(
+        "endpoint-peak",
+        output_da=output,
+        high_quality_identity=True,
+    )
+    output_dir = tmp_path / "report"
+
+    generate_evaluation_report([case], output_dir)
+
+    flags = list(
+        csv.DictReader((output_dir / "high_quality_flags.csv").open(encoding="utf-8", newline=""))
+    )
+    assert len(flags) == 1
+    assert "new eV peak prominence" in flags[0]["reasons"]
 
 
 def test_incomplete_locked_pairs_never_shrink_acceptance_denominators(tmp_path):
@@ -330,6 +354,63 @@ def test_repeated_samples_at_one_temperature_do_not_establish_a_trend(tmp_path):
         for item in evidence["incomplete_features"]
         if item["group"] == "replicates"
     )
+
+
+def test_temperature_group_keeps_members_with_missing_temperature_as_incomplete(tmp_path):
+    """A missing temperature must not disappear before rule-7 population accounting."""
+    cases = [
+        _case(
+            "known-temperature",
+            temperature_K=20.0,
+            temperature_group="series",
+            measurement_uncertainty=0.01,
+        ),
+        _case(
+            "missing-temperature",
+            temperature_K=None,
+            temperature_group="series",
+            measurement_uncertainty=0.01,
+        ),
+    ]
+    output_dir = tmp_path / "report"
+
+    generate_evaluation_report(cases, output_dir)
+
+    trends = json.loads((output_dir / "temperature_trends.json").read_text(encoding="utf-8"))
+    assert [row["record_id"] for row in trends["groups"]["series"]["samples"]] == [
+        "known-temperature",
+        "missing-temperature",
+    ]
+    acceptance = json.loads((output_dir / "acceptance.json").read_text(encoding="utf-8"))
+    rule = acceptance["rules"]["7_temperature_trends"]
+    assert rule["status"] == "not_evaluated"
+    assert rule["evidence"]["missing_temperature_record_ids"] == ["missing-temperature"]
+
+
+def test_missing_measurement_uncertainty_makes_temperature_rule_incomplete(tmp_path):
+    """Missing uncertainty must remain missing rather than becoming zero evidence."""
+    cases = [
+        _case(
+            "known-uncertainty",
+            temperature_K=20.0,
+            temperature_group="series",
+            measurement_uncertainty=0.01,
+        ),
+        _case(
+            "missing-uncertainty",
+            temperature_K=50.0,
+            temperature_group="series",
+            measurement_uncertainty=None,
+        ),
+    ]
+    output_dir = tmp_path / "report"
+
+    generate_evaluation_report(cases, output_dir)
+
+    acceptance = json.loads((output_dir / "acceptance.json").read_text(encoding="utf-8"))
+    rule = acceptance["rules"]["7_temperature_trends"]
+    assert rule["status"] == "not_evaluated"
+    assert rule["evidence"]["missing_measurement_uncertainty_record_ids"] == ["missing-uncertainty"]
 
 
 def test_cli_writes_controlled_report_under_allowed_root_as_not_evaluated(
