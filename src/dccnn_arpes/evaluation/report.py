@@ -497,10 +497,12 @@ def _peak_candidates(profile: np.ndarray, prominence: float) -> list[tuple[int, 
         for peak, value in zip(peaks, properties["prominences"], strict=True)
     ]
     left_prominence = float(profile[0] - np.min(profile[1:]))
-    if left_prominence > prominence:
+    left_is_local_maximum = profile[0] > profile[1] or np.isclose(profile[0], profile[1])
+    if left_is_local_maximum and left_prominence > prominence:
         candidates.append((0, left_prominence))
     right_prominence = float(profile[-1] - np.min(profile[:-1]))
-    if right_prominence > prominence:
+    right_is_local_maximum = profile[-1] > profile[-2] or np.isclose(profile[-1], profile[-2])
+    if right_is_local_maximum and right_prominence > prominence:
         candidates.append((profile.size - 1, right_prominence))
     return candidates
 

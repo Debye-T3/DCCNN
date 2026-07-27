@@ -91,7 +91,7 @@ def _case_from_row(row: Mapping[str, str], split_directory: Path) -> EvaluationC
     temperature = _optional_float(row, "temperature_K")
     uncertainty = _optional_float(row, "measurement_uncertainty")
     temperature_group = row.get("temperature_group", "").strip()
-    if not temperature_group and temperature is not None:
+    if not temperature_group:
         temperature_group = (
             row.get("sample_id", "").strip() or row.get("acquisition_group", "").strip()
         )

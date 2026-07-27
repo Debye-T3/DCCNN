@@ -9,7 +9,11 @@ import pytest
 import xarray as xr
 
 from dccnn_arpes.cli import eval as eval_cli
-from dccnn_arpes.evaluation.report import EvaluationCase, generate_evaluation_report
+from dccnn_arpes.evaluation.report import (
+    EvaluationCase,
+    _peak_candidates,
+    generate_evaluation_report,
+)
 from dccnn_arpes.io import write_cut
 
 
@@ -248,6 +252,13 @@ def test_high_quality_endpoint_peak_above_five_percent_requires_review(tmp_path,
     )
     assert len(flags) == 1
     assert "new eV peak prominence" in flags[0]["reasons"]
+
+
+def test_endpoint_peak_candidate_must_be_higher_than_adjacent_sample():
+    """A high endpoint below its neighbor must not be promoted to a peak."""
+    candidates = _peak_candidates(np.asarray([4.0, 5.0, 1.0, 1.0, 1.0]), prominence=0.1)
+
+    assert [index for index, _ in candidates] == [1]
 
 
 def test_incomplete_locked_pairs_never_shrink_acceptance_denominators(tmp_path):
@@ -558,3 +569,76 @@ def test_cli_preserves_standard_split_rows_when_scientific_artifacts_do_not_exis
     rows = pd.read_csv(destination / "per_file_metrics.csv")
     assert len(rows) == 5
     assert set(rows["record_id"]) == {"locked-row"}
+
+
+def test_cli_fallback_temperature_group_keeps_missing_temperature_standard_split_row(
+    tmp_path, monkeypatch
+):
+    """A blank temperature must not remove a same-sample row from fallback trend grouping."""
+    allowed_root = tmp_path / "outputs"
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    input_path = artifact_dir / "input.h5"
+    write_cut(_cut(), input_path)
+    split_path = tmp_path / "test.csv"
+    with split_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=(
+                "record_id",
+                "converted_path",
+                "sample_id",
+                "temperature_K",
+                "pair_type",
+                "split",
+                "review_status",
+            ),
+        )
+        writer.writeheader()
+        writer.writerows(
+            [
+                {
+                    "record_id": "known-temperature",
+                    "converted_path": input_path,
+                    "sample_id": "sample-series",
+                    "temperature_K": "20.0",
+                    "pair_type": "B",
+                    "split": "test",
+                    "review_status": "approved",
+                },
+                {
+                    "record_id": "missing-temperature",
+                    "converted_path": input_path,
+                    "sample_id": "sample-series",
+                    "temperature_K": "",
+                    "pair_type": "B",
+                    "split": "test",
+                    "review_status": "approved",
+                },
+            ]
+        )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("seed: 20260727\n", encoding="utf-8")
+    destination = allowed_root / "fallback-temperature-group"
+    monkeypatch.setattr(eval_cli, "_REPORT_ROOT", allowed_root)
+
+    eval_cli.main(
+        [
+            "--config",
+            str(config_path),
+            "--split",
+            str(split_path),
+            "--output",
+            str(destination),
+        ]
+    )
+
+    trends = json.loads((destination / "temperature_trends.json").read_text(encoding="utf-8"))
+    assert [row["record_id"] for row in trends["groups"]["sample-series"]["samples"]] == [
+        "known-temperature",
+        "missing-temperature",
+    ]
+    acceptance = json.loads((destination / "acceptance.json").read_text(encoding="utf-8"))
+    rule = acceptance["rules"]["7_temperature_trends"]
+    assert rule["status"] == "not_evaluated"
+    assert rule["evidence"]["missing_temperature_record_ids"] == ["missing-temperature"]
