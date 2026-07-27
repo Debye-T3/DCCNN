@@ -84,13 +84,16 @@ def validate_locations(repo: Path, source: Path, archive: Path, output: Path) ->
         raise ValueError("archive root must be a directory path")
     if _is_within(output_path, source_root):
         raise ValueError("inventory output must not be under the source root")
+    if _is_within(output_path, archive_root):
+        raise ValueError("inventory output must not be under the archive root")
     return repo_root, source_root, archive_root, output_path
 
 
-def _classify(path: Path) -> str:
-    if path.is_dir():
-        is_result_directory = any(part.casefold().startswith("result") for part in path.parts)
-        return "result_directory" if is_result_directory else "directory"
+def _is_result_directory(path: Path, source_root: Path) -> bool:
+    return any(part.casefold().startswith("result") for part in path.relative_to(source_root).parts)
+
+
+def _classify_file(path: Path) -> str:
     suffix = path.suffix.casefold()
     if suffix in _CHECKPOINT_SUFFIXES:
         return "checkpoint"
@@ -122,7 +125,7 @@ def _iter_legacy_paths(source_root: Path) -> Iterable[Path]:
     for path in paths:
         if path.is_symlink():
             continue
-        if path.is_file() or (path.is_dir() and _classify(path) == "result_directory"):
+        if path.is_file() or (path.is_dir() and _is_result_directory(path, source_root)):
             yield path
 
 
@@ -133,10 +136,11 @@ def inventory_legacy(source_root: Path, archive_root: Path) -> list[InventoryEnt
         stat = path.stat()
         relative = path.relative_to(source_root).as_posix()
         checksum = _sha256(path) if path.is_file() else ""
+        asset_type = "result_directory" if path.is_dir() else _classify_file(path)
         entries.append(
             InventoryEntry(
                 path=relative,
-                type=_classify(path),
+                type=asset_type,
                 size_bytes=stat.st_size,
                 modified_utc=_modified_utc(stat.st_mtime),
                 sha256=checksum,

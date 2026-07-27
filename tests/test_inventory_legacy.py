@@ -153,3 +153,51 @@ def test_inventory_rejects_unsafe_archive_roots(
     assert message in completed.stderr
     assert _sha256(source) == hashlib.sha256(b"input").hexdigest()
     assert not output.exists()
+
+
+def test_inventory_rejects_report_output_inside_the_proposed_archive(tmp_path: Path) -> None:
+    """Writing a report must not create the archive directory it only proposes to use."""
+    repo = tmp_path / "repo"
+    source = repo / "legacy.bin"
+    source.parent.mkdir()
+    source.write_bytes(b"input")
+    archive = tmp_path / "archive"
+    output = archive / "legacy_inventory.csv"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--archive",
+            str(archive),
+            "--output",
+            str(output),
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert completed.returncode != 0
+    assert "archive root" in completed.stderr
+    assert _sha256(source) == hashlib.sha256(b"input").hexdigest()
+    assert not archive.exists()
+
+
+def test_inventory_result_directories_are_relative_to_the_source_root(tmp_path: Path) -> None:
+    """A parent named results must not reclassify ordinary source directories."""
+    repo = tmp_path / "results-parent" / "repo"
+    source = repo / "ordinary" / "asset.bin"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"input")
+    archive = tmp_path / "archive"
+    output = tmp_path / "inventory.csv"
+
+    _run_inventory(repo, archive, output)
+
+    with output.open(encoding="utf-8", newline="") as stream:
+        by_path = {row["path"]: row for row in csv.DictReader(stream)}
+    assert "ordinary" not in by_path
+    assert by_path["ordinary/asset.bin"]["type"] == "other"
