@@ -261,6 +261,20 @@ def test_endpoint_peak_candidate_must_be_higher_than_adjacent_sample():
     assert [index for index, _ in candidates] == [1]
 
 
+@pytest.mark.parametrize(
+    "profile",
+    [
+        [4.0, 4.0, 5.0, 1.0, 1.0],
+        [1.0, 1.0, 5.0, 4.0, 4.0],
+    ],
+)
+def test_endpoint_plateau_must_be_higher_than_first_different_sample(profile):
+    """A tied boundary shoulder that rises inward must not become an endpoint peak."""
+    candidates = _peak_candidates(np.asarray(profile), prominence=0.1)
+
+    assert [index for index, _ in candidates] == [2]
+
+
 def test_incomplete_locked_pairs_never_shrink_acceptance_denominators(tmp_path):
     """Silently dropping a locked pair with missing evidence must fail this test."""
     complete = _case("complete-a", pair_type="A")

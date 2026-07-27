@@ -490,6 +490,15 @@ def _write_figures(
         _write_profile_figure(case, arrays, "alpha", figure_dir / f"{stem}_mdc.png")
 
 
+def _boundary_is_local_maximum(profile: np.ndarray) -> bool:
+    boundary = profile[0]
+    for value in profile[1:]:
+        if np.isclose(boundary, value):
+            continue
+        return bool(boundary > value)
+    return False
+
+
 def _peak_candidates(profile: np.ndarray, prominence: float) -> list[tuple[int, float]]:
     peaks, properties = find_peaks(profile, prominence=prominence)
     candidates = [
@@ -497,12 +506,10 @@ def _peak_candidates(profile: np.ndarray, prominence: float) -> list[tuple[int, 
         for peak, value in zip(peaks, properties["prominences"], strict=True)
     ]
     left_prominence = float(profile[0] - np.min(profile[1:]))
-    left_is_local_maximum = profile[0] > profile[1] or np.isclose(profile[0], profile[1])
-    if left_is_local_maximum and left_prominence > prominence:
+    if _boundary_is_local_maximum(profile) and left_prominence > prominence:
         candidates.append((0, left_prominence))
     right_prominence = float(profile[-1] - np.min(profile[:-1]))
-    right_is_local_maximum = profile[-1] > profile[-2] or np.isclose(profile[-1], profile[-2])
-    if right_is_local_maximum and right_prominence > prominence:
+    if _boundary_is_local_maximum(profile[::-1]) and right_prominence > prominence:
         candidates.append((profile.size - 1, right_prominence))
     return candidates
 
