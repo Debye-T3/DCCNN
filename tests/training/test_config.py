@@ -91,6 +91,8 @@ def test_smoke_overrides_are_in_memory_and_limited(tmp_path):
     assert smoke.paths.manifest == config.paths.manifest
     assert smoke.paths.pairs == config.paths.pairs
     assert smoke.paths.splits == config.paths.splits
+    assert smoke.smoke_test is True
+    assert smoke.scientific_use is False
     assert path.read_bytes() == original
 
 

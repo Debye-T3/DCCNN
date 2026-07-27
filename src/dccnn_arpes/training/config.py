@@ -219,10 +219,16 @@ class TrainConfig:
     data: DataConfig
     training: TrainingConfig
     loss: LossConfig
+    smoke_test: bool = False
+    scientific_use: bool = True
 
     def __post_init__(self) -> None:
         if type(self.seed) is not int or self.seed < 0:
             raise ValueError("seed must be non-negative")
+        if not isinstance(self.smoke_test, bool) or not isinstance(self.scientific_use, bool):
+            raise TypeError("smoke_test and scientific_use must be boolean")
+        if self.smoke_test == self.scientific_use:
+            raise ValueError("smoke runs must be non-scientific and non-smoke runs scientific")
 
     def as_dict(self) -> dict[str, object]:
         result = asdict(self)
@@ -244,6 +250,8 @@ class TrainConfig:
             model=replace(self.model, channels=4, blocks=1),
             data=replace(self.data, samples_per_epoch=2),
             training=training,
+            smoke_test=True,
+            scientific_use=False,
         )
 
 

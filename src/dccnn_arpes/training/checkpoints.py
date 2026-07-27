@@ -27,6 +27,8 @@ class CheckpointState:
     config: dict[str, object]
     hashes: dict[str, str]
     versions: dict[str, object]
+    smoke_test: bool
+    scientific_use: bool
 
 
 def save_checkpoint(
@@ -55,6 +57,8 @@ def save_checkpoint(
         "config": config.as_dict(),
         "hashes": dict(hashes),
         "versions": {key: _metadata_value(value) for key, value in versions.items()},
+        "smoke_test": config.smoke_test,
+        "scientific_use": config.scientific_use,
     }
     torch.save(payload, temporary)
     temporary.replace(destination)
@@ -80,6 +84,8 @@ def load_checkpoint(
         "config",
         "hashes",
         "versions",
+        "smoke_test",
+        "scientific_use",
     }
     missing = required.difference(payload)
     if missing:
@@ -97,4 +103,6 @@ def load_checkpoint(
         config=dict(payload["config"]),
         hashes=dict(payload["hashes"]),
         versions=dict(payload["versions"]),
+        smoke_test=bool(payload["smoke_test"]),
+        scientific_use=bool(payload["scientific_use"]),
     )

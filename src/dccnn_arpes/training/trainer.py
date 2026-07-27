@@ -304,23 +304,63 @@ def _validate_pairs(pairs: list[PairRecord], master_records: list[ManifestRecord
             raise ValueError(f"pair {pair.pair_id!r} crosses split boundaries")
 
 
-def _validate_split_membership(
-    master_records: list[ManifestRecord], split_records: list[ManifestRecord]
-) -> None:
+def _master_by_id(master_records: list[ManifestRecord]) -> dict[str, ManifestRecord]:
     master_by_id: dict[str, ManifestRecord] = {}
     for record in master_records:
         if not record.record_id or record.record_id in master_by_id:
             raise ValueError("master manifest record IDs must be non-empty and unique")
         master_by_id[record.record_id] = record
-    for record in split_records:
-        master = master_by_id.get(record.record_id)
-        if master is None:
+    return master_by_id
+
+
+def _validate_partitions(
+    master_records: list[ManifestRecord],
+    partitions: dict[str, list[ManifestRecord]],
+) -> None:
+    master_by_id = _master_by_id(master_records)
+    observed: dict[str, str] = {}
+    for split in ("train", "val", "test"):
+        local_ids: set[str] = set()
+        for record in partitions[split]:
+            if not record.record_id or record.record_id in local_ids:
+                raise ValueError(f"{split} partition record IDs must be non-empty and unique")
+            local_ids.add(record.record_id)
+            if record.record_id in observed:
+                raise ValueError(
+                    f"record {record.record_id!r} appears in multiple partitions: "
+                    f"{observed[record.record_id]} and {split}"
+                )
+            observed[record.record_id] = split
+            master = master_by_id.get(record.record_id)
+            if master is None:
+                raise ValueError(
+                    f"split record {record.record_id!r} is not present in the master manifest"
+                )
+            if master != record:
+                raise ValueError(
+                    f"split record {record.record_id!r} does not match the master manifest"
+                )
+            if record.split != split:
+                raise ValueError(
+                    f"record {record.record_id!r} is in {split}.csv but declares {record.split!r}"
+                )
+
+    for record in master_records:
+        eligible = (
+            record.review_status in _REVIEWED
+            and bool(record.converted_path)
+            and not record.exclusion_reason
+        )
+        if not eligible:
+            continue
+        if record.split not in partitions:
             raise ValueError(
-                f"split record {record.record_id!r} is not present in the master manifest"
+                f"eligible master record {record.record_id!r} has invalid split {record.split!r}"
             )
-        if master != record:
+        actual = observed.get(record.record_id)
+        if actual is None:
             raise ValueError(
-                f"split record {record.record_id!r} does not match the master manifest"
+                f"eligible master record {record.record_id!r} is missing from {record.split}"
             )
 
 
@@ -414,38 +454,93 @@ def _epoch(
     return {name: value / batches for name, value in totals.items()}
 
 
-def _provenance(config: TrainConfig) -> dict[str, object]:
+def _provenance(config: TrainConfig, file_hashes: dict[str, str]) -> dict[str, object]:
     path = config.paths.manifest.parent / "data_provenance.json"
-    if path.is_file():
+    if not path.is_file():
+        raise FileNotFoundError(f"required data provenance file does not exist: {path}")
+    try:
         value = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(value, dict) or "kind" not in value:
-            raise ValueError(f"invalid data provenance file: {path}")
-        return value
-    return {
-        "kind": "reviewed_manifest",
-        "manifest": str(config.paths.manifest),
-        "pairs": str(config.paths.pairs),
-        "splits": str(config.paths.splits),
+    except json.JSONDecodeError as error:
+        raise ValueError(f"invalid JSON in data provenance file: {path}") from error
+    required = {
+        "schema_version",
+        "classification",
+        "scientific_use",
+        "record_ids",
+        "input_sha256",
     }
+    if not isinstance(value, dict) or not required.issubset(value):
+        raise ValueError(f"data provenance file is missing required fields: {path}")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        raise ValueError("data provenance schema_version must be 1")
+    expected_classification = (
+        "controlled_smoke_fixture" if config.smoke_test else "reviewed_scientific_dataset"
+    )
+    if value["classification"] != expected_classification:
+        raise ValueError(f"data provenance classification must be {expected_classification!r}")
+    if (
+        type(value["scientific_use"]) is not bool
+        or value["scientific_use"] is not config.scientific_use
+    ):
+        raise ValueError("data provenance scientific_use does not match the run")
+    record_ids = value["record_ids"]
+    if (
+        not isinstance(record_ids, list)
+        or any(not isinstance(record_id, str) for record_id in record_ids)
+        or len(record_ids) != len(set(record_ids))
+        or set(record_ids) != set(file_hashes)
+    ):
+        raise ValueError("data provenance record_ids must exactly match partition inputs")
+    declared_hashes = value["input_sha256"]
+    if (
+        not isinstance(declared_hashes, dict)
+        or set(declared_hashes) != set(file_hashes)
+        or any(
+            not isinstance(declared, str) or len(declared) != 64 or declared.casefold() != actual
+            for record_id, actual in file_hashes.items()
+            for declared in [declared_hashes.get(record_id)]
+        )
+    ):
+        raise ValueError("data provenance input_sha256 must exactly match partition inputs")
+    return value
 
 
-def run_training(config: TrainConfig) -> TrainingResult:
-    """Train a residual denoiser and write resumable, provenance-complete artifacts."""
+def _write_run_json(path: Path, run: dict[str, object]) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(run, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _run_training_body(
+    config: TrainConfig,
+    *,
+    output: Path,
+    run_path: Path,
+    run: dict[str, object],
+    config_hash: str,
+) -> TrainingResult:
     device, device_name = _device(config)
     _seed_everything(config.seed)
     master_records = _read_manifest(config.paths.manifest)
     train_records = _read_manifest(config.paths.splits / "train.csv")
     val_records = _read_manifest(config.paths.splits / "val.csv")
-    _validate_split_membership(master_records, train_records + val_records)
+    test_records = _read_manifest(config.paths.splits / "test.csv")
+    partitions = {"train": train_records, "val": val_records, "test": test_records}
+    _validate_partitions(master_records, partitions)
     _validate_records(train_records, "train")
     _validate_records(val_records, "val")
+    if test_records:
+        _validate_records(test_records, "test")
     pairs = _read_pairs(config.paths.pairs)
     _validate_pairs(pairs, master_records)
 
     manifest_hash = _sha256(config.paths.manifest)
     split_hash = _split_sha256(config.paths.splits)
     pairs_hash = _sha256(config.paths.pairs)
-    file_hashes, data_hash = _data_hashes(train_records + val_records)
+    file_hashes, data_hash = _data_hashes(train_records + val_records + test_records)
     hashes = {
         "manifest_sha256": manifest_hash,
         "split_sha256": split_hash,
@@ -453,34 +548,26 @@ def run_training(config: TrainConfig) -> TrainingResult:
         "data_sha256": data_hash,
     }
     provenance_path = config.paths.manifest.parent / "data_provenance.json"
-    if provenance_path.is_file():
-        hashes["provenance_sha256"] = _sha256(provenance_path)
-    config_material = json.dumps(config.as_dict(), sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
-    config_hash = hashlib.sha256(config_material).hexdigest()
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-    output = config.paths.output / f"{timestamp}-{config_hash[:12]}"
-    output.mkdir(parents=True, exist_ok=False)
+    provenance = _provenance(config, file_hashes)
+    hashes["provenance_sha256"] = _sha256(provenance_path)
 
     versions = _versions(device_name)
-    run = {
-        "seed": config.seed,
-        **hashes,
-        "config_sha256": config_hash,
-        "git_commit": versions["git_commit"],
-        "git_dirty": versions["git_dirty"],
-        "source_diff_sha256": versions["source_diff_sha256"],
-        "python_version": versions["python"],
-        "pytorch_version": versions["pytorch"],
-        "cuda_version": versions["cuda"],
-        "device": versions["device"],
-        "data_provenance": _provenance(config),
-        "data_file_sha256": file_hashes,
-        "config": config.as_dict(),
-    }
-    run_path = output / "run.json"
-    run_path.write_text(json.dumps(run, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    run.update(
+        {
+            **hashes,
+            "config_sha256": config_hash,
+            "git_commit": versions["git_commit"],
+            "git_dirty": versions["git_dirty"],
+            "source_diff_sha256": versions["source_diff_sha256"],
+            "python_version": versions["python"],
+            "pytorch_version": versions["pytorch"],
+            "cuda_version": versions["cuda"],
+            "device": versions["device"],
+            "data_provenance": provenance,
+            "data_file_sha256": file_hashes,
+        }
+    )
+    _write_run_json(run_path, run)
 
     train_dataset = _dataset(train_records, pairs, config)
     val_dataset = _dataset(val_records, pairs, config)
@@ -574,3 +661,55 @@ def run_training(config: TrainConfig) -> TrainingResult:
         metrics_path=metrics_path,
         run_path=run_path,
     )
+
+
+def run_training(config: TrainConfig) -> TrainingResult:
+    """Train a residual denoiser and atomically record the complete run lifecycle."""
+    config_material = json.dumps(config.as_dict(), sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    config_hash = hashlib.sha256(config_material).hexdigest()
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+    output = config.paths.output / f"{timestamp}-{config_hash[:12]}"
+    output.mkdir(parents=True, exist_ok=False)
+    run_path = output / "run.json"
+    run: dict[str, object] = {
+        "status": "running",
+        "started_at_utc": datetime.now(UTC).isoformat(),
+        "completed_at_utc": None,
+        "output_dir": str(output),
+        "seed": config.seed,
+        "config_sha256": config_hash,
+        "config": config.as_dict(),
+        "smoke_test": config.smoke_test,
+        "scientific_use": config.scientific_use,
+        "requested_device": config.training.device,
+    }
+    _write_run_json(run_path, run)
+    try:
+        result = _run_training_body(
+            config,
+            output=output,
+            run_path=run_path,
+            run=run,
+            config_hash=config_hash,
+        )
+    except Exception as error:
+        run.update(
+            {
+                "status": "failed",
+                "completed_at_utc": datetime.now(UTC).isoformat(),
+                "error_class": type(error).__name__,
+                "error_message": str(error),
+            }
+        )
+        _write_run_json(run_path, run)
+        raise
+    run.update(
+        {
+            "status": "completed",
+            "completed_at_utc": datetime.now(UTC).isoformat(),
+        }
+    )
+    _write_run_json(run_path, run)
+    return result
