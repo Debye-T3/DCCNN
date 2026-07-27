@@ -120,23 +120,37 @@ def _modified_utc(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
-def _iter_legacy_paths(source_root: Path) -> Iterable[Path]:
-    paths = sorted(source_root.rglob("*"), key=lambda path: path.relative_to(source_root).as_posix())
-    for path in paths:
-        if path.is_symlink():
+def _is_redirect(path: Path) -> bool:
+    """Return whether a directory entry redirects traversal outside its parent tree."""
+    return path.is_symlink() or path.is_junction()
+
+
+def _iter_legacy_paths(directory: Path, source_root: Path | None = None) -> Iterable[Path]:
+    """Yield regular source entries without recursing into any filesystem redirect."""
+    source_root = source_root or directory
+    for path in sorted(directory.iterdir(), key=lambda item: item.name):
+        if _is_redirect(path):
             continue
-        if path.is_file() or (path.is_dir() and _is_result_directory(path, source_root)):
+        if path.is_dir():
+            if _is_result_directory(path, source_root):
+                yield path
+            yield from _iter_legacy_paths(path, source_root)
+        elif path.is_file():
             yield path
 
 
 def inventory_legacy(source_root: Path, archive_root: Path) -> list[InventoryEntry]:
     """Inspect legacy entries and return a stable report without writing to them."""
+    resolved_archive_root = archive_root.resolve(strict=False)
     entries: list[InventoryEntry] = []
     for path in _iter_legacy_paths(source_root):
         stat = path.stat()
         relative = path.relative_to(source_root).as_posix()
         checksum = _sha256(path) if path.is_file() else ""
         asset_type = "result_directory" if path.is_dir() else _classify_file(path)
+        proposed_destination = (resolved_archive_root / relative).resolve(strict=False)
+        if not _is_within(proposed_destination, resolved_archive_root):
+            raise ValueError("proposed destination resolves outside the archive root")
         entries.append(
             InventoryEntry(
                 path=relative,
@@ -145,7 +159,7 @@ def inventory_legacy(source_root: Path, archive_root: Path) -> list[InventoryEnt
                 modified_utc=_modified_utc(stat.st_mtime),
                 sha256=checksum,
                 duplicate_group="",
-                proposed_destination=str((archive_root / relative).resolve(strict=False)),
+                proposed_destination=str(proposed_destination),
             )
         )
 

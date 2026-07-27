@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -37,6 +38,20 @@ def _run_inventory(repo: Path, archive: Path, output: Path) -> subprocess.Comple
         text=True,
         capture_output=True,
     )
+
+
+def _make_junction(link: Path, target: Path) -> None:
+    """Create a Windows junction without requiring symbolic-link privileges."""
+    completed = subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        pytest.skip(f"cannot create Windows junction: {completed.stderr.strip()}")
+    assert not link.is_symlink()
+    assert link.is_junction()
 
 
 def test_inventory_is_stable_groups_duplicates_and_never_mutates_sources(tmp_path: Path) -> None:
@@ -201,3 +216,87 @@ def test_inventory_result_directories_are_relative_to_the_source_root(tmp_path: 
         by_path = {row["path"]: row for row in csv.DictReader(stream)}
     assert "ordinary" not in by_path
     assert by_path["ordinary/asset.bin"]["type"] == "other"
+
+
+def test_inventory_skips_external_symlinks_without_mutating_them(tmp_path: Path) -> None:
+    """A redirect must not make an external legacy asset part of the source inventory."""
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside.h5"
+    repo.mkdir()
+    outside.write_bytes(b"outside")
+    redirect = repo / "outside-link.h5"
+    try:
+        redirect.symlink_to(outside)
+    except OSError as error:
+        pytest.skip(f"symbolic links unavailable: {error}")
+    archive = tmp_path / "archive"
+    output = tmp_path / "inventory.csv"
+    before = (_sha256(outside), outside.stat().st_mtime_ns)
+
+    _run_inventory(repo, archive, output)
+
+    with output.open(encoding="utf-8", newline="") as stream:
+        paths = {row["path"] for row in csv.DictReader(stream)}
+    assert "outside-link.h5" not in paths
+    assert (_sha256(outside), outside.stat().st_mtime_ns) == before
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
+def test_inventory_skips_external_junctions_without_mutating_them(tmp_path: Path) -> None:
+    """Windows junctions are redirects even when Path.is_symlink() is false."""
+    repo = tmp_path / "repo"
+    outside_root = tmp_path / "outside"
+    outside = outside_root / "outside.h5"
+    repo.mkdir()
+    outside_root.mkdir()
+    outside.write_bytes(b"outside")
+    junction = repo / "junction"
+    _make_junction(junction, outside_root)
+    archive = tmp_path / "archive"
+    output = tmp_path / "inventory.csv"
+    before = (_sha256(outside), outside.stat().st_mtime_ns)
+
+    _run_inventory(repo, archive, output)
+
+    with output.open(encoding="utf-8", newline="") as stream:
+        paths = {row["path"] for row in csv.DictReader(stream)}
+    assert "junction/outside.h5" not in paths
+    assert (_sha256(outside), outside.stat().st_mtime_ns) == before
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
+def test_inventory_rejects_proposed_destination_that_resolves_outside_archive(tmp_path: Path) -> None:
+    """An archive junction must not redirect a proposed destination outside its root."""
+    repo = tmp_path / "repo"
+    source = repo / "redirect" / "input.h5"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"input")
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    outside_root = tmp_path / "outside"
+    outside_root.mkdir()
+    _make_junction(archive / "redirect", outside_root)
+    output = tmp_path / "inventory.csv"
+    output.write_text("existing report", encoding="utf-8")
+    before = (_sha256(source), source.stat().st_mtime_ns)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--archive",
+            str(archive),
+            "--output",
+            str(output),
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert completed.returncode != 0
+    assert "proposed destination" in completed.stderr
+    assert output.read_text(encoding="utf-8") == "existing report"
+    assert (_sha256(source), source.stat().st_mtime_ns) == before
