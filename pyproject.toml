@@ -14,7 +14,7 @@ dependencies = [
   "pyyaml>=6.0",
   "scikit-image>=0.24",
   "scipy>=1.14",
-  "torch>=2.7",
+  "torch==2.12.1",
   "tqdm>=4.66",
   "xarray>=2024.10",
 ]
@@ -37,6 +37,14 @@ testpaths = ["tests"]
 
 [tool.uv]
 constraint-dependencies = ["numpy<2.4"]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
 
 [tool.ruff]
 line-length = 100

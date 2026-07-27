@@ -1,0 +1,35 @@
+paths:
+  manifest: D:/Projects/dccnn/workspace/manifests/records.csv
+  pairs: D:/Projects/dccnn/workspace/manifests/pairs.csv
+  splits: D:/Projects/dccnn/workspace/splits
+  output: D:/Projects/dccnn/outputs/experiments
+seed: 20260727
+model:
+  name: residual_denoiser_2d
+  channels: 64
+  blocks: 8
+data:
+  crop_size: [256, 256]
+  samples_per_epoch: 10000
+  sampling:
+    A: 0.50
+    B: 0.30
+    C: 0.20
+  identity_probability: 0.10
+  noise:
+    poisson_peak_counts: [50.0, 5000.0]
+    background_fraction: [0.0, 0.08]
+    stripe_probability: 0.30
+    stripe_fraction: [0.0, 0.05]
+training:
+  batch_size: 6
+  epochs: 100
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  workers: 4
+  device: cuda
+  amp: true
+loss:
+  charbonnier: 0.80
+  ms_ssim: 0.15
+  gradient: 0.05
