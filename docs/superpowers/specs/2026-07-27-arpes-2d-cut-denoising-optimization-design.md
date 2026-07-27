@@ -32,7 +32,7 @@ D:\Projects\dccnn\
 ├─ dccnn-arpes-main\        # Git 源码仓库
 ├─ workspace\
 │  ├─ manifests\            # 原始数据索引、配对审核、数据划分
-│  ├─ converted\            # 转换后的标准 H5
+│  ├─ converted\            # convert 输出的 xarray/HDF5
 │  ├─ cache\                # 可重建的裁剪索引与统计缓存
 │  └─ splits\               # train/val/test 清单
 ├─ outputs\
@@ -45,6 +45,27 @@ D:\Projects\dccnn\
 
 `D:\Data\ARPES` 保持为原始实验档案。`D:\Projects\dccnn\workspace` 保存可重新生成的机器学习派生数据，`outputs` 保存训练与推理结果。源码仓库只保存源码、配置、测试、文档和不含敏感绝对路径的版本化数据清单。
 
+### 3.1 统一数据格式
+
+`D:\Projects\convert` 项目输出的 xarray/HDF5 是 DCCNN 新流程唯一的标准交换格式。文件虽然使用 `.h5` 扩展名，但其内部必须是由 `xarray.to_netcdf()` 通过 `h5netcdf` 或 `netCDF4` 写出的 NetCDF4/HDF5 结构，而不是任意的 `h5py` 数据集集合。
+
+第一阶段二维 cut 的规范对象是一个 `xarray.DataArray`：
+
+- 维度为 `("eV", "alpha")`；
+- `eV` 和 `alpha` 是与维度绑定的一维坐标，不是普通数据变量；
+- 强度数组为二维数值数据；
+- 样品、采集条件和仪器参数保存在 `attrs` 中；
+- 文件能由 `xr.load_dataarray()` 直接读取；
+- 加载后允许按名称转置到 `("eV", "alpha")`，但禁止仅凭数组下标猜测坐标含义。
+
+DCCNN 的训练、评估和推理入口只消费该规范对象。进入 PyTorch 前，数据加载层负责校验维度、坐标、有限值和单调性，再提取 NumPy 数组并转换为 tensor；模型层不直接解析 HDF5。
+
+map 扩展允许使用 `xarray.DataArray`、`Dataset` 或 `DataTree` 表达额外扫描维度，但不属于第一阶段实现。遇到包含多个候选信号的 `Dataset` 或 `DataTree` 时，必须由配置显式指定变量或节点，不能自动选择。
+
+旧 DCCNN H5 不是标准格式。它只通过独立的只读兼容适配器加载，显式执行 `spectrum → DataArray`、`energy → eV`、`thetax → alpha` 映射。适配结果必须通过与标准文件相同的校验；旧文件不在原位改写。需要长期保留的数据可另存为新的标准 xarray/HDF5 文件。
+
+推理不得向输入文件追加数据集。每张降噪 cut 保存为独立的 `<原文件名>_denoised.h5`，仍是可由 `xr.load_dataarray()` 直接读取的 `DataArray`，并保持原始维度、坐标和实验属性；模型名称、checkpoint 标识、归一化参数和运行时间作为新增属性记录。输入文件的校验和必须保持不变。
+
 源码仓库整理为：
 
 ```text
@@ -54,7 +75,7 @@ dccnn-arpes-main/
 ├─ README.md
 ├─ src/dccnn_arpes/
 │  ├─ data/
-│  ├─ conversion/
+│  ├─ io/                    # xarray 标准读取、校验与旧 H5 适配
 │  ├─ models/
 │  ├─ training/
 │  ├─ inference/
@@ -79,6 +100,8 @@ dccnn-arpes-main/
 - 实验记录 `.xlsx`
 
 扫描结果写入 `D:\Projects\dccnn\workspace\manifests`，不回写原始目录。
+
+原始谱图到标准 xarray/HDF5 的转换由 `D:\Projects\convert` 负责。DCCNN 不复制 PXT、TXT、BIN 或 IBW 的转换实现，只索引原始记录、关联 convert 产物并校验标准文件；这样避免两套转换器生成语义不同但扩展名相同的 H5。
 
 标准数据清单至少包含：
 
@@ -180,7 +203,7 @@ C 级单张数据：20%
 
 1. 根据采集时间或 sweep 数量转换为计数率；
 2. 对同一配对使用共同的尺度；
-3. 采用稳定的 `log1p` 或配置指定的强度变换；
+3. 在保留 `eV`、`alpha` 坐标和原始属性的前提下，采用稳定的 `log1p` 或配置指定的强度变换；
 4. 使用由输入或配对共同确定的稳健缩放参数；
 5. 保存逆变换所需统计量；
 6. 推理输出使用同一统计量恢复物理强度尺度。
@@ -317,14 +340,14 @@ ResidualDenoiser2D 必须同时满足：
 - `uv.lock`
 - 与 RTX 5080 匹配的官方 PyTorch CUDA wheel
 
-核心依赖包括 PyTorch、NumPy、SciPy、h5py、pandas、PyYAML、scikit-image、matplotlib、pytorch-msssim 和 tqdm。PySide6 作为 GUI 可选依赖，不进入最小训练环境。
+核心依赖包括 PyTorch、xarray、h5netcdf、netCDF4、NumPy、SciPy、h5py、pandas、PyYAML、scikit-image、matplotlib、pytorch-msssim 和 tqdm。`h5py` 仅用于旧 DCCNN H5 兼容适配及底层诊断，不用于写出新的标准数据。PySide6 作为 GUI 可选依赖，不进入最小训练环境。
 
 提供以下统一入口：
 
 ```text
 dccnn-data scan
 dccnn-data pairs
-dccnn-data convert
+dccnn-data validate
 dccnn-train
 dccnn-eval
 dccnn-denoise
@@ -339,7 +362,11 @@ dccnn-denoise
 - group-level split 无泄漏；
 - 动态增强跨 epoch 变化；
 - 固定种子可复现；
-- PXT、TXT 和 H5 的 shape 与坐标轴；
+- convert 输出的 DataArray 可经 `xr.load_dataarray()` 往返读取；
+- 标准二维 cut 的维度为 `("eV", "alpha")`，坐标与数据 shape 一致；
+- 坐标或维度缺失、重复、非有限或语义不明确时明确失败；
+- 旧 DCCNN H5 只读适配为规范 DataArray，且不修改源文件；
+- 标准文件与旧格式适配结果经过同一数据校验；
 - 模型输入输出 shape；
 - 损失有限并能反向传播；
 - checkpoint 保存与恢复；
@@ -353,15 +380,16 @@ dccnn-denoise
 迁移顺序为：
 
 1. 保存当前 Git 状态、diff、文件清单和校验和；
-2. 不删除现有权重、H5、CSV 或预览图；
+2. 不删除现有权重、H5、CSV 或预览图，并区分标准 xarray/HDF5 与旧 DCCNN H5；
 3. 将旧实验产物归入 `D:\Projects\dccnn\legacy_archive`；
 4. 清理 Git 对大体积原始数据和派生产物的跟踪；
 5. 更新 `.gitignore`；
 6. 建立最小可运行环境；
-7. 在新结构中复现 LegacyCCNN；
-8. 运行锁定测试集；
-9. 训练和评估 ResidualDenoiser2D；
-10. 归档校验通过后，另行决定是否删除重复文件。
+7. 将 convert 输出设为数据入口，并建立旧 DCCNN H5 只读适配器；
+8. 在新结构中复现 LegacyCCNN；
+9. 运行锁定测试集；
+10. 训练和评估 ResidualDenoiser2D；
+11. 归档校验通过后，另行决定是否删除重复文件。
 
 同名不同内容、无法匹配实验记录或被旧推理修改过的 H5 一律标记为待审核，不自动覆盖。
 
