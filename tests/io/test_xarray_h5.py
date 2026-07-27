@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from dccnn_arpes.io import xarray_h5
 from dccnn_arpes.io.xarray_h5 import load_cut, validate_cut, write_cut
 
 
@@ -21,6 +22,18 @@ def test_write_cut_round_trips_canonical_data(tmp_path, canonical_cut):
     )
     assert restored.dims == ("eV", "alpha")
     assert restored.attrs == canonical_cut.attrs
+
+
+def test_engine_preference_skips_xarray_versions_without_the_option(monkeypatch, tmp_path, canonical_cut):
+    """Keeps imports and canonical writes usable with xarray's older option set."""
+    def unsupported_set_options(**kwargs):
+        pytest.fail(f"unsupported option was configured: {kwargs}")
+
+    monkeypatch.setattr(xarray_h5.xr, "get_options", dict)
+    monkeypatch.setattr(xarray_h5.xr, "set_options", unsupported_set_options)
+
+    xarray_h5._prefer_h5netcdf_for_default_loading()
+    write_cut(canonical_cut, tmp_path / "compatible.h5")
 
 
 def test_validate_cut_requires_eV_and_alpha_dimensions(canonical_cut):

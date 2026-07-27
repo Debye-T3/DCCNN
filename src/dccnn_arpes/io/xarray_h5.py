@@ -10,9 +10,16 @@ import xarray as xr
 
 _CUT_DIMS = ("eV", "alpha")
 
-# Prefer the bundled pure-HDF5 backend for xarray's unqualified loading path.
-# netCDF4 remains installed as a fallback for formats h5netcdf cannot open.
-xr.set_options(netcdf_engine_order=("h5netcdf", "netcdf4", "scipy"))
+
+def _prefer_h5netcdf_for_default_loading() -> None:
+    """Prefer h5netcdf where the installed xarray exposes engine ordering."""
+    if "netcdf_engine_order" not in xr.get_options():
+        return
+    # netCDF4 remains installed as a fallback for formats h5netcdf cannot open.
+    xr.set_options(netcdf_engine_order=("h5netcdf", "netcdf4", "scipy"))
+
+
+_prefer_h5netcdf_for_default_loading()
 
 
 def _is_real_numeric(dtype: np.dtype) -> bool:
