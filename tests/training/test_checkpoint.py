@@ -1,5 +1,8 @@
 """Checkpoint round-trip and schema tests."""
 
+from copy import deepcopy
+
+import pytest
 import torch
 
 from dccnn_arpes.models import ResidualDenoiser2D
@@ -93,4 +96,78 @@ def test_checkpoint_restores_epoch_optimizer_and_identical_output(tmp_path):
     assert restored.best_metric == 0.125
     assert restored.hashes["manifest_sha256"] == "a" * 64
     assert restored.versions["git_commit"] == "deadbeef"
+    assert restored.smoke_test is False
+    assert restored.scientific_use is True
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    assert payload["schema_version"] == 2
     torch.testing.assert_close(model(inputs)[0], expected, rtol=0, atol=0)
+
+
+def _saved_checkpoint(tmp_path):
+    model = ResidualDenoiser2D(channels=4, blocks=1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1.0e-4)
+    scaler = torch.amp.GradScaler("cpu", enabled=False)
+    path = tmp_path / "checkpoint.pt"
+    save_checkpoint(
+        path,
+        model=model,
+        optimizer=optimizer,
+        scaler=scaler,
+        epoch=1,
+        best_metric=0.25,
+        config=_config(tmp_path),
+        hashes={"manifest_sha256": "a" * 64},
+        versions={"device": "cpu"},
+    )
+    return path, model
+
+
+def _rewrite_payload(path, **updates):
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    payload.update(updates)
+    torch.save(payload, path)
+
+
+@pytest.mark.parametrize("field", ["smoke_test", "scientific_use"])
+def test_checkpoint_v2_rejects_string_intent_flags(tmp_path, field):
+    path, model = _saved_checkpoint(tmp_path)
+    _rewrite_payload(path, **{field: "false"})
+
+    with pytest.raises(TypeError, match=f"{field} must be a boolean"):
+        load_checkpoint(path, model=model)
+
+
+@pytest.mark.parametrize(
+    ("smoke_test", "scientific_use"),
+    [(False, False), (True, True)],
+)
+def test_checkpoint_v2_rejects_non_complementary_intent_flags(tmp_path, smoke_test, scientific_use):
+    path, model = _saved_checkpoint(tmp_path)
+    _rewrite_payload(path, smoke_test=smoke_test, scientific_use=scientific_use)
+
+    with pytest.raises(ValueError, match="intent flags must be complementary"):
+        load_checkpoint(path, model=model)
+
+
+def test_checkpoint_v2_rejects_intent_mismatch_with_embedded_config(tmp_path):
+    path, model = _saved_checkpoint(tmp_path)
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    mismatched_config = deepcopy(payload["config"])
+    mismatched_config["smoke_test"] = True
+    mismatched_config["scientific_use"] = False
+    _rewrite_payload(path, config=mismatched_config)
+
+    with pytest.raises(ValueError, match="intent flags do not match embedded config"):
+        load_checkpoint(path, model=model)
+
+
+def test_checkpoint_v1_is_rejected_with_distinct_legacy_diagnostic(tmp_path):
+    path, model = _saved_checkpoint(tmp_path)
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    payload["schema_version"] = 1
+    payload.pop("smoke_test")
+    payload.pop("scientific_use")
+    torch.save(payload, path)
+
+    with pytest.raises(ValueError, match="legacy checkpoint schema 1"):
+        load_checkpoint(path, model=model)

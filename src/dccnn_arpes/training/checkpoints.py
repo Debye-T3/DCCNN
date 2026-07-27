@@ -11,7 +11,7 @@ from torch import nn
 
 from .config import TrainConfig
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 def _metadata_value(value: object) -> str | int | float | bool | None:
@@ -74,6 +74,16 @@ def load_checkpoint(
 ) -> CheckpointState:
     """Restore supplied stateful objects and return checkpoint metadata."""
     payload: dict[str, Any] = torch.load(Path(path), map_location=map_location, weights_only=True)
+    if "schema_version" not in payload:
+        raise ValueError("checkpoint is missing required key(s): schema_version")
+    schema_version = payload["schema_version"]
+    if type(schema_version) is int and schema_version == 1:
+        raise ValueError(
+            "legacy checkpoint schema 1 has no trustworthy run-intent metadata "
+            "and cannot be resumed"
+        )
+    if type(schema_version) is not int or schema_version != _SCHEMA_VERSION:
+        raise ValueError(f"unsupported checkpoint schema {schema_version!r}")
     required = {
         "schema_version",
         "model_state",
@@ -90,8 +100,21 @@ def load_checkpoint(
     missing = required.difference(payload)
     if missing:
         raise ValueError(f"checkpoint is missing required key(s): {', '.join(sorted(missing))}")
-    if payload["schema_version"] != _SCHEMA_VERSION:
-        raise ValueError(f"unsupported checkpoint schema {payload['schema_version']!r}")
+    for field in ("smoke_test", "scientific_use"):
+        if type(payload[field]) is not bool:
+            raise TypeError(f"checkpoint {field} must be a boolean")
+    smoke_test = payload["smoke_test"]
+    scientific_use = payload["scientific_use"]
+    if smoke_test == scientific_use:
+        raise ValueError("checkpoint intent flags must be complementary")
+    config = payload["config"]
+    if not isinstance(config, dict):
+        raise TypeError("checkpoint config must be a mapping")
+    for field in ("smoke_test", "scientific_use"):
+        if type(config.get(field)) is not bool:
+            raise TypeError(f"checkpoint embedded config {field} must be a boolean")
+    if config["smoke_test"] is not smoke_test or config["scientific_use"] is not scientific_use:
+        raise ValueError("checkpoint intent flags do not match embedded config")
     model.load_state_dict(payload["model_state"])
     if optimizer is not None:
         optimizer.load_state_dict(payload["optimizer_state"])
@@ -100,9 +123,9 @@ def load_checkpoint(
     return CheckpointState(
         epoch=int(payload["epoch"]),
         best_metric=float(payload["best_metric"]),
-        config=dict(payload["config"]),
+        config=dict(config),
         hashes=dict(payload["hashes"]),
         versions=dict(payload["versions"]),
-        smoke_test=bool(payload["smoke_test"]),
-        scientific_use=bool(payload["scientific_use"]),
+        smoke_test=smoke_test,
+        scientific_use=scientific_use,
     )
