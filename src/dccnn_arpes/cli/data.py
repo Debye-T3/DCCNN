@@ -1,6 +1,8 @@
 """Data-preparation command-line interface."""
 
 import argparse
+import csv
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -15,7 +17,9 @@ from dccnn_arpes.data.discovery import (
     write_manifest_csv,
 )
 from dccnn_arpes.data.metadata import read_workbook_candidates
+from dccnn_arpes.data.pairing import propose_pairs, read_pairs_csv, write_pairs_csv
 from dccnn_arpes.data.schema import ManifestRecord
+from dccnn_arpes.data.splitting import assign_group_splits, write_split_csvs
 from dccnn_arpes.io import load_cut
 
 _WORKSPACE_ROOT = Path(r"D:\Projects\dccnn\workspace")
@@ -146,6 +150,67 @@ def _scan_command(source: Path, converted: Path, output: Path, aliases_path: Pat
     print(f"audit: {audit_path.resolve()}")
 
 
+def _validate_workspace_output(output: Path) -> Path:
+    """Keep generated review and split outputs inside the workspace boundary."""
+    workspace_root = _WORKSPACE_ROOT.expanduser().resolve(strict=False)
+    output = Path(output).expanduser().resolve(strict=False)
+    try:
+        output.relative_to(workspace_root)
+    except ValueError as error:
+        raise ValueError(f"generated outputs must be under workspace: {workspace_root}") from error
+    return output
+
+
+def _read_manifest_csv(path: Path) -> list[ManifestRecord]:
+    """Load Task 3's UTF-8 manifest representation without mutating source records."""
+    float_fields = {
+        "temperature_K",
+        "photon_energy_eV",
+        "position_x",
+        "position_y",
+        "position_z",
+        "position_polar",
+        "position_tilt",
+        "position_azimuth",
+        "acquisition_time_s",
+    }
+    fieldnames = set(ManifestRecord.__dataclass_fields__)
+    records: list[ManifestRecord] = []
+    with Path(path).open(encoding="utf-8", newline="") as stream:
+        for row in csv.DictReader(stream):
+            values = {field: row.get(field, "") for field in fieldnames}
+            for field in float_fields:
+                value = str(values[field]).strip()
+                values[field] = float(value) if value else None
+            sweep = str(values["sweep_count"]).strip()
+            values["sweep_count"] = int(sweep) if sweep else None
+            for field in ("energy_axis", "angle_axis"):
+                value = str(values[field]).strip()
+                values[field] = tuple(float(item) for item in json.loads(value)) if value else ()
+            records.append(ManifestRecord(**values))
+    return records
+
+
+def _pairs_command(manifest: Path, output: Path) -> None:
+    output = _validate_workspace_output(output)
+    pairs, decisions = propose_pairs(_read_manifest_csv(manifest))
+    write_pairs_csv(pairs, output)
+    print(f"pairs: {output.resolve()}")
+    print(f"accepted: {len(pairs)}; rejected: {sum(not decision.accepted for decision in decisions)}")
+
+
+def _split_command(manifest: Path, pairs_path: Path, output: Path) -> None:
+    output = _validate_workspace_output(output)
+    pairs = read_pairs_csv(pairs_path)
+    links = [(pair.left_record_id, pair.right_record_id) for pair in pairs]
+    assigned = assign_group_splits(_read_manifest_csv(manifest), pair_links=links)
+    audit = write_split_csvs(assigned, output, pair_links=links)
+    if not audit["leakage_free"]:
+        raise ValueError("a connected component appears in multiple splits")
+    print(f"splits: {output.resolve()}")
+    print(f"audit: {(output / 'split_audit.json').resolve()}")
+
+
 def main() -> None:
     """Run the data-preparation command-line interface."""
     parser = argparse.ArgumentParser(description="Prepare ARPES denoising data.")
@@ -158,6 +223,13 @@ def main() -> None:
     scan_parser.add_argument("--converted", type=Path, required=True)
     scan_parser.add_argument("--output", type=Path, required=True)
     scan_parser.add_argument("--aliases", type=Path)
+    pairs_parser = subparsers.add_parser("pairs", help="propose conservative reviewed cut pairs")
+    pairs_parser.add_argument("--manifest", type=Path, required=True)
+    pairs_parser.add_argument("--output", type=Path, required=True)
+    split_parser = subparsers.add_parser("split", help="create leakage-safe group-level splits")
+    split_parser.add_argument("--manifest", type=Path, required=True)
+    split_parser.add_argument("--pairs", type=Path, required=True)
+    split_parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
 
     if arguments.command == "validate":
@@ -165,10 +237,20 @@ def main() -> None:
             _validate_command(arguments.path, arguments.allow_legacy)
         except (OSError, ValueError, TypeError) as error:
             parser.error(str(error))
-    if arguments.command == "scan":
+    elif arguments.command == "scan":
         try:
             _scan_command(arguments.source, arguments.converted, arguments.output, arguments.aliases)
         except (OSError, ValueError, TypeError) as error:
+            parser.error(str(error))
+    elif arguments.command == "pairs":
+        try:
+            _pairs_command(arguments.manifest, arguments.output)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+            parser.error(str(error))
+    elif arguments.command == "split":
+        try:
+            _split_command(arguments.manifest, arguments.pairs, arguments.output)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
             parser.error(str(error))
 
 

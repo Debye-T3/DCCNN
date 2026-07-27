@@ -1,0 +1,9 @@
+pairing:
+  position_atol: 1.0e-6
+  coordinate_rtol: 1.0e-6
+  coordinate_atol: 1.0e-8
+split:
+  seed: 20260727
+  train: 0.80
+  val: 0.10
+  test: 0.10
