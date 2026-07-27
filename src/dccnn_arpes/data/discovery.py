@@ -32,6 +32,16 @@ def _normalised_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.casefold())
 
 
+def _normalised_tokens(value: str) -> set[str]:
+    """Return all separator-insensitive contiguous identifier candidates in a filename."""
+    parts = re.findall(r"[a-z0-9]+", value.casefold())
+    return {
+        "".join(parts[start:end])
+        for start in range(len(parts))
+        for end in range(start + 1, len(parts) + 1)
+    }
+
+
 def _decode_attribute(value: object) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
@@ -108,10 +118,10 @@ def _match_converted(record_list: Sequence[ManifestRecord], converted_path: Path
     if stem_matches:
         return stem_matches, "exact_stem"
 
-    candidate_tokens = set(re.findall(r"[a-z0-9]+", converted_path.stem.casefold()))
+    candidate_tokens = _normalised_tokens(converted_path.stem)
     file_id_attribute = attributes.get("file_id")
     if file_id_attribute:
-        candidate_tokens.update(re.findall(r"[a-z0-9]+", file_id_attribute.casefold()))
+        candidate_tokens.update(_normalised_tokens(file_id_attribute))
     token_matches = [
         index
         for index, record in enumerate(record_list)
@@ -176,7 +186,10 @@ def write_manifest_csv(records: Iterable[ManifestRecord], path: Path) -> None:
         writer = csv.DictWriter(stream, fieldnames=MANIFEST_FIELDNAMES)
         writer.writeheader()
         for record in records:
-            writer.writerow({key: "" if value is None else value for key, value in asdict(record).items()})
+            row = asdict(record)
+            for axis_name in ("energy_axis", "angle_axis"):
+                row[axis_name] = json.dumps(list(row[axis_name]), separators=(",", ":"))
+            writer.writerow({key: "" if value is None else value for key, value in row.items()})
 
 
 def source_snapshot(root: Path, *, sample_size: int = 25) -> dict[str, object]:

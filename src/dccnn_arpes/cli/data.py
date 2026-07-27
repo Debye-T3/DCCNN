@@ -18,6 +18,8 @@ from dccnn_arpes.data.metadata import read_workbook_candidates
 from dccnn_arpes.data.schema import ManifestRecord
 from dccnn_arpes.io import load_cut
 
+_WORKSPACE_ROOT = Path(r"D:\Projects\dccnn\workspace")
+
 
 def _format_range(values) -> str:
     """Format the inclusive range of one validated coordinate."""
@@ -81,8 +83,32 @@ def _apply_workbook_candidates(
     return applied
 
 
+def _validate_scan_output(source: Path, output: Path) -> None:
+    """Refuse any manifest or audit path outside the workspace or inside source data."""
+    source_root = Path(source).expanduser().resolve(strict=True)
+    workspace_root = _WORKSPACE_ROOT.expanduser().resolve(strict=False)
+    output = Path(output).expanduser().resolve(strict=False)
+    targets = (
+        output,
+        output.parent / "scan_audit.json",
+        output.parent / "unknown_excel_columns.json",
+        output.parent / "association_issues.json",
+    )
+    for target in targets:
+        try:
+            target.relative_to(workspace_root)
+        except ValueError as error:
+            raise ValueError(f"scan outputs must be under workspace: {workspace_root}") from error
+        try:
+            target.relative_to(source_root)
+        except ValueError:
+            continue
+        raise ValueError("scan outputs must not be under the source root")
+
+
 def _scan_command(source: Path, converted: Path, output: Path, aliases_path: Path | None) -> None:
     """Create source manifest and audits while treating source and converted roots as inputs."""
+    _validate_scan_output(source, output)
     aliases = _load_aliases(aliases_path)
     source_before = source_snapshot(source)
     records = scan_archive(source)

@@ -26,8 +26,8 @@ class ManifestRecord:
     position_polar: float | None = None
     position_tilt: float | None = None
     position_azimuth: float | None = None
-    energy_axis: str = ""
-    angle_axis: str = ""
+    energy_axis: tuple[float, ...] = ()
+    angle_axis: tuple[float, ...] = ()
     acquisition_time_s: float | None = None
     sweep_count: int | None = None
     pair_type: str = ""
