@@ -38,5 +38,10 @@ class ManifestRecord:
     exclusion_reason: str = ""
     notes: str = ""
 
+    def __post_init__(self) -> None:
+        """Detach axes from caller-owned sequences before exposing the frozen record."""
+        object.__setattr__(self, "energy_axis", tuple(self.energy_axis))
+        object.__setattr__(self, "angle_axis", tuple(self.angle_axis))
+
 
 MANIFEST_FIELDNAMES = tuple(field.name for field in fields(ManifestRecord))

@@ -111,6 +111,20 @@ def test_scan_command_rejects_output_inside_source_tree_without_changing_source(
     assert not output.exists()
 
 
+def test_scan_command_rejects_output_outside_workspace(tmp_path: Path, monkeypatch):
+    """Removing the workspace boundary would permit arbitrary manifest writes."""
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / "cut.pxt").write_text("source", encoding="utf-8")
+    monkeypatch.setattr(data_cli, "_WORKSPACE_ROOT", tmp_path / "workspace")
+    output = tmp_path / "outside" / "records.csv"
+
+    with pytest.raises(ValueError, match="workspace"):
+        data_cli._scan_command(archive, tmp_path / "converted", output, None)
+
+    assert not output.exists()
+
+
 def test_file_id_token_association_normalizes_separator_containing_identifiers(tmp_path: Path):
     """Tokenizing only individual filename pieces would lose a unique run-001 association."""
     converted = tmp_path / "converted"
@@ -159,3 +173,19 @@ def test_manifest_csv_serializes_axes_as_compact_json_arrays(tmp_path: Path):
     assert rows[0]["angle_axis"] == "[]"
     assert rows[1]["energy_axis"] == "[1.0,2.5]"
     assert rows[1]["angle_axis"] == "[-3.0,0.0]"
+
+
+def test_manifest_record_copies_axis_lists_to_immutable_tuples():
+    """Retaining caller-owned axis lists would violate the immutable manifest contract."""
+    energy_axis = [1.0, 2.5]
+    angle_axis = [-3.0, 0.0]
+    record = ManifestRecord(energy_axis=energy_axis, angle_axis=angle_axis)
+    energy_axis.append(4.0)
+    angle_axis.clear()
+
+    assert record.energy_axis == (1.0, 2.5)
+    assert record.angle_axis == (-3.0, 0.0)
+    assert isinstance(record.energy_axis, tuple)
+    assert isinstance(record.angle_axis, tuple)
+    with pytest.raises(AttributeError):
+        record.energy_axis.append(4.0)
