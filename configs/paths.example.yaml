@@ -1,0 +1,4 @@
+source: D:\Data\ARPES
+converted: D:\Projects\dccnn\workspace\converted
+output: D:\Projects\dccnn\workspace\manifests\records.csv
+metadata_aliases: configs\metadata_aliases.yaml

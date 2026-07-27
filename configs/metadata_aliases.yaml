@@ -1,0 +1,42 @@
+file_id:
+  - File ID
+  - FileID
+  - file
+  - 文件名
+  - 文件编号
+  - 文件号
+sample_name:
+  - Sample
+  - Sample Name
+  - sample_name
+  - 样品
+  - 样品名称
+temperature_K:
+  - Temperature (K)
+  - Temperature/K
+  - temperature_K
+  - 温度（K)
+  - 温度(K)
+  - 温度
+photon_energy_eV:
+  - Photon Energy (eV)
+  - Photon Energy
+  - photon_energy_eV
+  - 能量
+  - 能量（eV）
+  - 光子能量(eV)
+  - 光子能量
+polarization:
+  - Polarization
+  - Polarisation
+  - 偏振
+acquisition_time_s:
+  - Acquisition Time (s)
+  - Acquisition Time
+  - 采集时间(s)
+  - 采集时间
+sweep_count:
+  - Sweeps
+  - Sweep Count
+  - 扫描次数
+  - 扫描数
