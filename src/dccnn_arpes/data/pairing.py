@@ -3,6 +3,7 @@
 import csv
 import hashlib
 import math
+import os
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from itertools import combinations
@@ -55,13 +56,24 @@ def _missing(value: object) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-def _same_exact(left: object, right: object) -> bool:
+def _same_text(left: object, right: object) -> bool:
+    if _missing(left) or _missing(right):
+        return False
+    return str(left).strip() == str(right).strip()
+
+
+def _same_numeric_exact(left: object, right: object) -> bool:
+    """Compare only declared numeric physical metadata after parsing."""
     if _missing(left) or _missing(right):
         return False
     try:
         return float(left) == float(right)
     except (TypeError, ValueError):
-        return str(left).strip() == str(right).strip()
+        return False
+
+
+def _normalised_source_path(path: str) -> str:
+    return os.path.normcase(os.path.normpath(str(Path(path).expanduser().resolve(strict=False))))
 
 
 def _same_position(left: object, right: object, *, atol: float) -> bool:
@@ -99,9 +111,17 @@ def classify_pair(left: ManifestRecord, right: ManifestRecord) -> PairDecision:
     if left.review_status == "needs_review" or right.review_status == "needs_review":
         return _rejected(left, right, "metadata_inherited", review_status="needs_review")
 
-    for field in ("sample_id", "temperature_K", "photon_energy_eV", "polarization", "scan_type"):
-        if not _same_exact(getattr(left, field), getattr(right, field)):
+    for field in ("sample_id", "polarization", "scan_type"):
+        if not _same_text(getattr(left, field), getattr(right, field)):
             return _rejected(left, right, field)
+    for field in ("temperature_K", "photon_energy_eV"):
+        if not _same_numeric_exact(getattr(left, field), getattr(right, field)):
+            return _rejected(left, right, field)
+
+    if _missing(left.source_path) or _missing(right.source_path) or _normalised_source_path(
+        left.source_path
+    ) == _normalised_source_path(right.source_path):
+        return _rejected(left, right, "source_path")
 
     settings = _config()
     for field in (
@@ -131,12 +151,12 @@ def classify_pair(left: ManifestRecord, right: ManifestRecord) -> PairDecision:
     comparable_acquisition = (
         left.acquisition_time_s is not None
         and right.acquisition_time_s is not None
-        and not _same_exact(left.acquisition_time_s, right.acquisition_time_s)
+        and left.acquisition_time_s != right.acquisition_time_s
     )
     comparable_sweeps = (
         left.sweep_count is not None
         and right.sweep_count is not None
-        and not _same_exact(left.sweep_count, right.sweep_count)
+        and left.sweep_count != right.sweep_count
     )
     pair_type = "A" if comparable_acquisition or comparable_sweeps else "B"
     return PairDecision(left.record_id, right.record_id, accepted=True, pair_type=pair_type)

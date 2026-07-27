@@ -37,7 +37,10 @@ def _record(**changes) -> ManifestRecord:
 
 def test_identical_physical_settings_with_a_longer_acquisition_are_level_a():
     """Removing acquisition-scale comparison must make this test fail."""
-    decision = classify_pair(_record(), _record(record_id="right", acquisition_time_s=20.0, sweep_count=8))
+    decision = classify_pair(
+        _record(),
+        _record(record_id="right", source_path="D:/source/right.pxt", acquisition_time_s=20.0, sweep_count=8),
+    )
 
     assert decision.accepted is True
     assert decision.pair_type == "A"
@@ -50,6 +53,24 @@ def test_independent_repeats_with_identical_settings_are_level_b():
 
     assert decision.accepted is True
     assert decision.pair_type == "B"
+
+
+def test_sample_ids_remain_textual_identifiers():
+    """Normalizing textual sample IDs as numbers must make this test fail."""
+    decision = classify_pair(_record(sample_id="01"), _record(record_id="right", sample_id="1"))
+
+    assert decision.accepted is False
+    assert decision.exclusion_reason == "sample_id"
+
+
+def test_same_normalized_source_path_is_not_an_independent_repeat():
+    """Accepting a source file as its own repeat must make this test fail."""
+    decision = classify_pair(
+        _record(), _record(record_id="right", source_path="D:/source/nested/../left.pxt")
+    )
+
+    assert decision.accepted is False
+    assert decision.exclusion_reason == "source_path"
 
 
 @pytest.mark.parametrize(
@@ -67,7 +88,7 @@ def test_independent_repeats_with_identical_settings_are_level_b():
 )
 def test_prohibited_physical_differences_are_rejected(field, value, reason):
     """Dropping any physical comparison in this table must make a case fail."""
-    decision = classify_pair(_record(), _record(record_id="right", **{field: value}))
+    decision = classify_pair(_record(), _record(record_id="right", source_path="D:/source/right.pxt", **{field: value}))
 
     assert decision.accepted is False
     assert decision.exclusion_reason == reason
