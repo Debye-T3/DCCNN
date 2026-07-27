@@ -1,11 +1,15 @@
-import yaml # structure of the config
-import glob # search for paths
-import torch # Neural Network Framework
-import gc # Garbage Collector
-import random # dataset splits
-from datetime import datetime # gives current time for datanames
-from pathlib import Path # build paths
-from torch.utils.data import DataLoader, Subset # class of PyTorch for seperation of the Dataset in batches, shuffling, multithreading and iteration of batches
+import gc  # Garbage Collector
+import glob  # search for paths
+import random  # dataset splits
+from datetime import UTC, datetime  # gives current time for datanames
+from pathlib import Path  # build paths
+
+import torch  # Neural Network Framework
+import yaml  # structure of the config
+from torch.utils.data import (  # class of PyTorch for seperation of the Dataset in batches, shuffling, multithreading and iteration of batches
+    DataLoader,
+    Subset,
+)
 
 # Import externs
 from modules.datasets.dataset import build_dataset_from_config
@@ -13,6 +17,7 @@ from modules.models.ccnn import CCNN
 
 # import trainer
 from train.trainer import train_model
+
 
 def load_config(path):
     with open(path, "r") as f: # r is read mode, after usage it gets closed because of "with", python object is loaded as f
@@ -56,7 +61,7 @@ def run_all_configs(config_dir):
         csv_dir.mkdir(exist_ok=True)
         model_dir.mkdir(exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") # current time for filename
+        timestamp = datetime.now(UTC).astimezone().strftime("%Y%m%d_%H%M%S") # current time for filename
         mask = f"{timestamp}_layers{model_cfg['num_layers']}_batch{train_cfg['batch_size']}_kernel{model_cfg['kernel_size']}_alpha{train_cfg['alpha']}" # mask for resulting model filename 
         csv_path = csv_dir / f"{mask}.csv" # path of the .csv
         model_path = model_dir / f"{mask}.pt" # path of the .pt (model)

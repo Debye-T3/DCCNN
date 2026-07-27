@@ -169,17 +169,9 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
-# Local ARPES work products
-workspace/
-outputs/
-checkpoints/
-*.h5
-*.hdf5
-*.pt
-*.pth
-*.ckpt
-metrics/
-*_metrics.csv
+# Local ARPES work products. Keep source H5, legacy checkpoints, and configs trackable.
+/workspace/
+/outputs/
 
 # PyPI configuration file
 .pypirc

@@ -1,7 +1,6 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import List
 
 
 def parse_args() -> argparse.Namespace:
@@ -15,7 +14,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_glob(files: List[str]) -> str:
+def build_glob(files: list[str]) -> str:
     # run_inference.py 需要 glob，这里用花括号拼成“文件列表”形式
     if len(files) == 1:
         return files[0]

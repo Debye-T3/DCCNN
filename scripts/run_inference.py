@@ -1,9 +1,7 @@
 import argparse
 import glob
-import os
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 import zlib
+from pathlib import Path
 
 import h5py
 import matplotlib.pyplot as plt
@@ -11,13 +9,14 @@ import numpy as np
 import torch
 import yaml
 from matplotlib.colors import LogNorm
-from skimage.metrics import peak_signal_noise_ratio as psnr, structural_similarity as ssim  # 新增: PSNR/SSIM
+from skimage.metrics import peak_signal_noise_ratio as psnr  # 新增: PSNR/SSIM
+from skimage.metrics import structural_similarity as ssim
 
 from modules.datasets.dataset import ArpesH5Dataset
 from modules.models.ccnn import CCNN
 
 
-def load_config(path: Path) -> Dict:
+def load_config(path: Path) -> dict:
     with open(path, "r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
 
@@ -33,13 +32,13 @@ def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def prepare_extent(energy: np.ndarray, angle: np.ndarray) -> List[float]:
+def prepare_extent(energy: np.ndarray, angle: np.ndarray) -> list[float]:
     if energy.size and angle.size:
         return [float(angle[0]), float(angle[-1]), float(energy[0]), float(energy[-1])]
     return None
 
 
-def log_scale(data: np.ndarray) -> Dict[str, float]:
+def log_scale(data: np.ndarray) -> dict[str, float]:
     positive = data[data > 0]
     if positive.size == 0:
         return {"vmin": 1e-6, "vmax": 1.0}
@@ -93,7 +92,7 @@ def compute_energy_mask_info(
     method: str,
     percentile: float,
     smooth_window: int,
-) -> Tuple[np.ndarray, Optional[int], Optional[float], int]:
+) -> tuple[np.ndarray, int | None, float | None, int]:
     if energy.ndim != 1 or energy.size == 0:
         return np.ones_like(spectrum, dtype=np.float32), None, None, 0
 
@@ -157,7 +156,7 @@ def compute_energy_mask_info(
     return mask, cutoff, cutoff_energy, axis
 
 
-def apply_preview_noise(noisy: np.ndarray, noise_std: float, mask: Optional[np.ndarray]) -> np.ndarray:
+def apply_preview_noise(noisy: np.ndarray, noise_std: float, mask: np.ndarray | None) -> np.ndarray:
     if noise_std <= 0.0:
         return noisy
     sigma = float(noisy.std() + 1e-6) * noise_std
@@ -174,7 +173,7 @@ def apply_stripe_noise(
     array: np.ndarray,
     rng: np.random.Generator,
     strength: float,
-    mask: Optional[np.ndarray] = None,
+    mask: np.ndarray | None = None,
 ) -> np.ndarray:
     patch = np.array(array, dtype=np.float32, copy=True)
     sigma = float(patch.std() + 1e-6) * strength
@@ -190,11 +189,11 @@ def apply_stripe_noise(
     return patch + stripe
 
 
-def apply_blur(array: np.ndarray, sigma: float, mask: Optional[np.ndarray] = None) -> np.ndarray:
+def apply_blur(array: np.ndarray, sigma: float, mask: np.ndarray | None = None) -> np.ndarray:
     patch = np.array(array, dtype=np.float32, copy=True)
     if sigma <= 0.0:
         return patch
-    radius = max(1, int(round(sigma * 2)))
+    radius = max(1, round(sigma * 2))
     size = radius * 2 + 1
     x = np.arange(-radius, radius + 1, dtype=np.float32)
     kernel_1d = np.exp(-(x ** 2) / (2 * sigma ** 2))
@@ -217,7 +216,7 @@ def build_synthetic_noisy(
     stripe_strength: float,
     blur_prob: float,
     blur_sigma: float,
-    mask: Optional[np.ndarray],
+    mask: np.ndarray | None,
     seed: int,
 ) -> np.ndarray:
     rng = np.random.default_rng(seed=seed)
@@ -251,17 +250,17 @@ def run_inference(
     input_glob: str,
     output_dir: Path,
     target_key_override: str = "",
-    input_files: Optional[List[str]] = None,
+    input_files: list[str] | None = None,
     preview_noise: bool = False,
     inference_noise: bool = False,
-    inference_noise_std: Optional[float] = None,
+    inference_noise_std: float | None = None,
 ) -> None:
     cfg = load_config(config_path)
     model_cfg = cfg["model"]
     data_cfg = cfg.get("data", {})
     path_cfg = cfg["paths"]
 
-    files: List[str] = []
+    files: list[str] = []
     if input_files:
         files = [str(p) for p in input_files]
     else:

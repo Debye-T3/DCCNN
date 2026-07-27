@@ -2,7 +2,7 @@ import argparse
 import gc
 import glob
 import random
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import torch
@@ -56,7 +56,7 @@ def run_all_configs(config_dir: str, pattern: str = "baseline_v3.yaml"):
         csv_dir.mkdir(exist_ok=True)
         model_dir.mkdir(exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).astimezone().strftime("%Y%m%d_%H%M%S")
         mask = (
             f"{timestamp}_layers{model_cfg['num_layers']}_batch{train_cfg['batch_size']}_"
             f"kernel{model_cfg['kernel_size']}_alpha{train_cfg['alpha']}"
