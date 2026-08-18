@@ -1,0 +1,36 @@
+model:
+  kernel_size: 3
+  num_layers: 7
+
+training:
+  batch_size: 6
+  learning_rate: 4e-05
+  epochs: 100
+  alpha: 0.10
+  early_stopping_patience: 15
+  val_split: 0.10
+  split_seed: 123
+  use_gpu: true
+
+paths:
+  h5_glob: "./data/converted_h5/nbvt*_txt.h5"
+  output_dir: "./results_nbvt_v6_stable"
+  csv_subdir: "csv"
+
+data:
+  samples_per_file: 320
+  crop_size: [192, 192]
+  input_channel: 0
+  input_key: "raw_channels"
+  target_key: "spectrum"
+  normalize: true
+  add_noise: true
+  noise_std: 0.09
+  stripe_noise_prob: 0.52
+  stripe_strength: 0.13
+  blur_prob: 0.33
+  blur_sigma: 1.15
+  noise_energy_method: "percentile"
+  noise_energy_percentile: 5.0
+  noise_energy_smooth: 7
+  noise_min_run: 12

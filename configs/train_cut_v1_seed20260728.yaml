@@ -5,7 +5,7 @@ paths:
   output: D:/Projects/dccnn/outputs/experiments
   provenance_path: D:/Projects/dccnn/workspace/manifests/data_provenance.scientific.json
   smoke_provenance_path: D:/Projects/dccnn/workspace/manifests/data_provenance.smoke.json
-seed: 20260727
+seed: 20260728
 model:
   name: residual_denoiser_2d
   channels: 64
